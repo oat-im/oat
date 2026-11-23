@@ -30,18 +30,25 @@ struct PathInfo {
 bool exists(Str path);
 
 // Notices when a file has been rewritten, by polling: no OS file watching.
-// Call poll() once a frame. It returns true once per new version, and only
-// after the file has looked the same for `settle_polls` calls in a row, so a
-// file that is still being written is not reported early.
+// Call poll() as often as you like, typically once a frame. It returns true
+// once per new version, and only after the file's size and modified time have
+// stayed the same for `settle_ns` of real time, so the answer does not depend
+// on the frame rate.
+//
+// Settling is a heuristic. Some linkers create the output at its full size
+// and fill it in through a memory map, so the file can look finished while it
+// is still being written. If what you do with the new version fails (a
+// library that will not load yet), call retry(): poll() reports the same
+// version again after another settle period.
 struct FileChange {
-  i64 known_ns = 0; // the version last reported (or first seen)
-  u64 known_size = 0;
-  i64 seen_ns = 0; // what the previous poll saw
+  i64 seen_ns = 0;      // modified time at the last poll
   u64 seen_size = 0;
-  u32 settled = 0;
-  bool primed = false;
+  u64 changed_at = 0;   // now_ns() when the file last looked different
+  bool primed = false;  // the first sighting is the baseline, not a change
+  bool pending = false; // a new version is waiting to settle
 
-  bool poll(Str path, u32 settle_polls = 3);
+  bool poll(Str path, u64 settle_ns = 250ull * 1000 * 1000);
+  void retry();
 };
 
 struct DirEntry {

@@ -119,6 +119,48 @@ TEST(os_dylib_load_copy) {
   CHECK(os::Library::load_copy("/no/such/dir/libmissing.so").error() == Error::NotFound);
 }
 
+TEST(os_dylib_load_copy_sweeps_stale_copies) {
+  // What a crashed run leaves behind: copies nobody will ever unload.
+  Allocator h = heap();
+  Arena arena = Arena::create(h);
+  Allocator a = arena.allocator();
+  Str plugin = OAT_TEST_PLUGIN_PATH;
+  Str ext = os::extension(plugin);
+  Str base = plugin.substr(0, plugin.size() - ext.size());
+
+  StrBuf stale1, stale2, unrelated;
+  stale1.append(base, a);
+  stale1.append(".live-0badc0de-0", a);
+  stale1.append(ext, a);
+  stale2.append(base, a);
+  stale2.append(".live-0badc0de-7", a);
+  stale2.append(ext, a);
+  unrelated.append(base, a); // same directory, different pattern: must survive
+  unrelated.append(".notes.txt", a);
+  CHECK(os::write_entire_file(stale1.view(), "old").has_value());
+  CHECK(os::write_entire_file(stale2.view(), "old").has_value());
+  CHECK(os::write_entire_file(unrelated.view(), "keep").has_value());
+
+  Result<os::Library> first = os::Library::load_copy(plugin);
+  CHECK(first.has_value());
+  CHECK(!os::exists(stale1.view()) && !os::exists(stale2.view()));
+  CHECK(os::exists(unrelated.view()));
+  CHECK(os::exists(plugin));
+
+  if (first) {
+    // The sweep leaves this process's own live copies alone.
+    Result<os::Library> second = os::Library::load_copy(plugin);
+    CHECK(second.has_value());
+    CHECK(os::exists(first->copy_path));
+    auto add = first->symbol_as<int (*)(int, int)>("oat_test_plugin_add");
+    CHECK(add && add(2, 2) == 4);
+    if (second) second->unload();
+    first->unload();
+  }
+  CHECK(os::remove(unrelated.view()).has_value());
+  arena.destroy();
+}
+
 TEST(os_hot_reload_signal) {
   // dylib plus a modification time is all hot reload needs.
   Result<os::PathInfo> info = os::path_info(OAT_TEST_PLUGIN_PATH);

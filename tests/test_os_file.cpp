@@ -221,36 +221,54 @@ TEST(fs_directories) {
 TEST(fs_file_change) {
   TempDir tmp("oat_tmp_change");
   Str path = tmp.path("game.lib");
+  const u64 ms = 1000 * 1000;
+  const u64 settle = 200 * ms; // wide margins, so a slow machine does not change the outcome
   os::FileChange change;
-  CHECK(!change.poll(path)); // nothing there yet
+  CHECK(!change.poll(path, settle)); // nothing there yet
 
   CHECK(os::write_entire_file(path, "version one").has_value());
-  CHECK(!change.poll(path)); // the first sighting is the baseline, not a change
-  for (u32 i = 0; i < 5; ++i) CHECK(!change.poll(path));
+  CHECK(!change.poll(path, settle)); // the first sighting is the baseline, not a change
+  os::sleep_ns(2 * settle);
+  CHECK(!change.poll(path, settle));
 
-  // A rewrite is reported once, and only after it has settled.
+  // A rewrite is reported once, and only after it has been still for the
+  // settle time, however many polls that takes.
   CHECK(os::write_entire_file(path, "version two, longer").has_value());
-  CHECK(!change.poll(path, 3)); // sees the new state
-  CHECK(!change.poll(path, 3)); // settled 1
-  CHECK(!change.poll(path, 3)); // settled 2
-  CHECK(change.poll(path, 3));  // settled 3: reported
-  for (u32 i = 0; i < 5; ++i) CHECK(!change.poll(path, 3));
+  u32 polls = 0;
+  u64 start = os::now_ns();
+  while (!change.poll(path, settle) && os::now_ns() - start < 5000 * ms) ++polls;
+  u64 waited = os::now_ns() - start;
+  CHECK(waited >= settle && waited < 5000 * ms);
+  CHECK(polls > 3); // polling fast does not make it report sooner
+  os::sleep_ns(2 * settle);
+  CHECK(!change.poll(path, settle)); // reported once
 
   // A file that keeps changing is not reported until it stops.
   CHECK(os::write_entire_file(path, "3").has_value());
-  CHECK(!change.poll(path, 2));
-  CHECK(!change.poll(path, 2));
+  CHECK(!change.poll(path, settle));
+  os::sleep_ns(settle / 2);
   CHECK(os::write_entire_file(path, "3 and more").has_value()); // the linker is still going
-  CHECK(!change.poll(path, 2));                                 // counting starts over
-  CHECK(!change.poll(path, 2));
-  CHECK(change.poll(path, 2));
+  CHECK(!change.poll(path, settle));                            // the clock starts again
+  os::sleep_ns(settle / 2);
+  CHECK(!change.poll(path, settle)); // half a settle since the last write: too soon
+  os::sleep_ns(settle);
+  CHECK(change.poll(path, settle));
+
+  // retry(): the same version is reported again after another settle period,
+  // for when loading it failed.
+  change.retry();
+  CHECK(!change.poll(path, settle));
+  os::sleep_ns(settle + 5 * ms);
+  CHECK(change.poll(path, settle));
+  CHECK(!change.poll(path, settle));
 
   // Vanishing for a moment (replace by delete and create) is not a change by itself.
   CHECK(os::remove(path).has_value());
-  CHECK(!change.poll(path, 1));
+  CHECK(!change.poll(path, settle));
   CHECK(os::write_entire_file(path, "4th version").has_value());
-  CHECK(!change.poll(path, 1));
-  CHECK(change.poll(path, 1));
+  CHECK(!change.poll(path, settle));
+  os::sleep_ns(settle + 5 * ms);
+  CHECK(change.poll(path, settle));
 }
 
 TEST(fs_long_and_unicode_paths) {

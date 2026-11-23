@@ -5,6 +5,8 @@
 
 #include <SDL3_net/SDL_net.h>
 
+#include <atomic>
+
 namespace oat::net {
 
 using os::detail::fail;
@@ -20,6 +22,18 @@ void shutdown() { NET_Quit(); }
 // Address
 // ---------------------------------------------------------------------------
 
+#if OAT_DEBUG
+static std::atomic<u32> g_live_addresses{0};
+static void address_count(int delta) {
+  if (delta > 0) g_live_addresses.fetch_add(1, std::memory_order_relaxed);
+  else g_live_addresses.fetch_sub(1, std::memory_order_relaxed);
+}
+u32 live_address_count() { return g_live_addresses.load(std::memory_order_relaxed); }
+#else
+static void address_count(int) {}
+u32 live_address_count() { return 0; }
+#endif
+
 Str Address::text() const {
   const char* s = handle ? NET_GetAddressString(handle) : nullptr;
   return s ? Str(s) : Str();
@@ -33,11 +47,15 @@ bool Address::same_host(const Address& other) const {
 Address Address::retain() const {
   Address a;
   a.handle = handle ? NET_RefAddress(handle) : nullptr;
+  if (a.handle) address_count(+1);
   return a;
 }
 
 void Address::release() {
-  if (handle) NET_UnrefAddress(handle);
+  if (handle) {
+    NET_UnrefAddress(handle);
+    address_count(-1);
+  }
   handle = nullptr;
 }
 
@@ -56,6 +74,7 @@ Result<Address> resolve(Str host, i32 timeout_ms) {
   }
   Address a;
   a.handle = address;
+  address_count(+1);
   return a;
 }
 
@@ -175,6 +194,7 @@ Result<Datagram> UdpSocket::receive(Span<u8> buffer) {
   // The datagram's own reference dies with it below; this one is the caller's.
   Datagram out;
   out.from.handle = NET_RefAddress(dgram->addr);
+  address_count(+1);
   out.port = dgram->port;
   usize size = static_cast<usize>(dgram->buflen);
   out.truncated = size > buffer.size();

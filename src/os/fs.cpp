@@ -28,33 +28,34 @@ bool exists(Str path) {
   return SDL_GetPathInfo(cpath.get(), &info) && info.type != SDL_PATHTYPE_NONE;
 }
 
-bool FileChange::poll(Str path, u32 settle_polls) {
+bool FileChange::poll(Str path, u64 settle_ns) {
   detail::CStr cpath(path);
   SDL_PathInfo info;
-  if (!SDL_GetPathInfo(cpath.get(), &info) || info.type != SDL_PATHTYPE_FILE) {
-    settled = 0; // missing for a moment while it is being replaced
-    return false;
-  }
-  i64 now_time = info.modify_time;
-  u64 now_size = info.size;
+  if (!SDL_GetPathInfo(cpath.get(), &info) || info.type != SDL_PATHTYPE_FILE)
+    return false; // missing for a moment while it is being replaced
+  u64 now = SDL_GetTicksNS();
   if (!primed) {
     primed = true;
-    known_ns = seen_ns = now_time;
-    known_size = seen_size = now_size;
+    seen_ns = info.modify_time;
+    seen_size = info.size;
     return false;
   }
-  if (now_time != seen_ns || now_size != seen_size) {
-    seen_ns = now_time; // still changing: start counting again
-    seen_size = now_size;
-    settled = 0;
+  if (info.modify_time != seen_ns || info.size != seen_size) {
+    seen_ns = info.modify_time; // still changing: the clock starts again
+    seen_size = info.size;
+    changed_at = now;
+    pending = true;
     return false;
   }
-  if (seen_ns == known_ns && seen_size == known_size) return false;
-  if (++settled < settle_polls) return false;
-  known_ns = seen_ns;
-  known_size = seen_size;
-  settled = 0;
+  if (!pending || now - changed_at < settle_ns) return false;
+  pending = false;
   return true;
+}
+
+void FileChange::retry() {
+  // Report the current version again, after it has had another settle period.
+  pending = true;
+  changed_at = SDL_GetTicksNS();
 }
 
 struct ListDirState {

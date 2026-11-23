@@ -12,19 +12,27 @@ namespace oat::os {
 //   os::FileChange changed;                 // see os/fs.h
 //   os::Library game = *os::Library::load_copy(path);
 //   each frame:
-//     if (changed.poll(path)) {             // new build, and the linker is done
+//     if (changed.poll(path)) {             // a new build that has stopped changing
 //       if (auto fresh = os::Library::load_copy(path)) {
 //         game.unload();
 //         game = *fresh;                    // then look the symbols up again
-//       }                                   // on failure keep running the old one
+//       } else {
+//         changed.retry();                  // not loadable yet: ask again shortly
+//       }                                   // meanwhile the old one keeps running
 //     }
 //
-// Two things make the obvious version (load the file, reload when its time
-// changes) fail, and the recipe above handles both:
+// The obvious version (load the file, reload when its time changes) fails in
+// four ways. The recipe handles the first three; the fourth is in your build.
 //   - Windows locks a loaded DLL, so the linker cannot write the next build.
 //     load_copy loads a private copy and leaves the original free.
 //   - The modified time changes when the linker starts writing, not when it
 //     finishes. FileChange waits until the file has stopped changing.
+//   - Even then the file can be incomplete (see FileChange), so a failed load
+//     is retried instead of being treated as the end of that build.
+//   - On Windows with a debugger attached, the debugger locks the library's
+//     .pdb as well, and the next link fails on that instead. Give every build
+//     its own PDB name, for example /PDB:game_%RANDOM%.pdb on the link line.
+//     oat cannot do this for you.
 struct Library {
   SDL_SharedObject* handle = nullptr;
   char* copy_path = nullptr; // set by load_copy; the file is deleted by unload
@@ -35,8 +43,11 @@ struct Library {
   // SetErrorMode(SEM_FAILCRITICALERRORS) once at start-up.
   [[nodiscard]] static Result<Library> load(Str path);
 
-  // Copies the library next to itself under a unique name and loads the copy.
-  // unload() deletes the copy.
+  // Copies the library next to itself under a unique name
+  // ("game.live-<id>-<n>.dll") and loads the copy. unload() deletes the copy.
+  // Copies left behind by an earlier run that crashed are deleted here too.
+  // That sweep removes every "game.live-*" copy this process did not make, so
+  // do not hot-reload the same library file from two running games.
   [[nodiscard]] static Result<Library> load_copy(Str path);
 
   // The address of an exported function, or nullptr if there is none.

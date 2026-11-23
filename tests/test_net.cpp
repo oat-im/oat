@@ -182,6 +182,7 @@ TEST(net_tcp_connect_refused) {
 }
 
 TEST(net_udp_loopback) {
+  u32 addresses_before = net::live_address_count();
   net::Address addr = *net::resolve("127.0.0.1");
   Result<net::UdpSocket> a = net::UdpSocket::bind(UDP_PORT_A);
   Result<net::UdpSocket> b = net::UdpSocket::bind(UDP_PORT_B);
@@ -240,8 +241,21 @@ TEST(net_udp_loopback) {
   Result<void> empty = a->send(addr, UDP_PORT_B, std::span<const u8>());
   CHECK(!empty && empty.error() == Error::InvalidArgument);
 
+#if OAT_DEBUG
+  // The count makes a forgotten release visible: one received packet that is
+  // not released shows up as one extra live address.
+  CHECK(net::live_address_count() == addresses_before + 1); // just `addr`
+  CHECK(a->send(addr, UDP_PORT_B, as_bytes("leak?")).has_value());
+  Result<net::Datagram> held = poll([&] { return b->receive(buf); });
+  CHECK(held.has_value());
+  CHECK(net::live_address_count() == addresses_before + 2);
+  if (held) held->from.release();
+  CHECK(net::live_address_count() == addresses_before + 1);
+#endif
+
   a->close();
   b->close();
   b->close(); // harmless
   addr.release();
+  CHECK(net::live_address_count() == addresses_before);
 }

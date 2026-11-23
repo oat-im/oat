@@ -88,9 +88,9 @@ oat is built on a handful of standard types. They are aliased in `oat/base.h`, a
 
 **`algo.h`** `sort` (introsort), `sort_stable`, `radix_sort`, `lower_bound`, `upper_bound`, `hash_bytes`, `hash_u64`, `hash_combine`, `Rng` (xoshiro256**).
 
-**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (synced to disk, then renamed into place), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` with `load_copy`, and `FileChange` to poll for a finished rebuild (the hot-reload recipe is at the top of `os/dylib.h`).
+**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (synced to disk, then renamed into place), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` with `load_copy`, and `FileChange` to poll for a rebuild that has stopped changing for 250 ms (the hot-reload recipe, including what to do when a load fails and the Windows PDB caveat, is at the top of `os/dylib.h`).
 
-**`net.h`** `net::resolve` (with a timeout), `TcpListener` (all addresses or one), `TcpStream` (`drain` before `close`, or queued data is dropped), `UdpSocket`, `wait_for_input`. Writes queue without limit, so backpressure is the caller's job (`pending_writes`).
+**`net.h`** `net::resolve` (with a timeout), `TcpListener` (all addresses or one), `TcpStream` (`drain` before `close`, or queued data is dropped), `UdpSocket`, `wait_for_input`. Writes queue without limit, so backpressure is the caller's job (`pending_writes`). A received datagram's sender address must be released; `net::live_address_count()` shows a missing release in debug builds.
 
 The rules every type and call site must follow are in [PRECONDITIONS.md](PRECONDITIONS.md). The short version: elements are moved with `memcpy`, containers never run destructors, and nothing holds a pointer across growth.
 

@@ -36,6 +36,13 @@ struct Address {
   void release();
 };
 
+// How many Address references are alive: every resolve(), retain() and
+// received Datagram::from adds one, every release() removes one. A number that
+// keeps climbing means a release() is missing, most often in a receive loop
+// that skips a packet early. Counted when the library is built with
+// OAT_DEBUG; always 0 otherwise.
+u32 live_address_count();
+
 // Turns a host name or a numeric address into an Address. Blocks until the
 // lookup finishes or the timeout passes, so call it from a job: a slow DNS
 // server holds the calling thread for up to `timeout_ms` (-1 waits forever).

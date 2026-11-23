@@ -21,17 +21,53 @@ Result<Library> Library::load(Str path) {
   return lib;
 }
 
+// Identifies this process's copies. Not unique in any strong sense; it only
+// has to differ from the run that crashed and left files behind.
+static u32 dylib_process_id() {
+  static const u32 id = static_cast<u32>(SDL_GetTicksNS() ^ static_cast<u64>(wall_clock())) | 1;
+  return id;
+}
+
+// Removes "<stem>.live-*<ext>" files in the library's directory that this
+// process did not create: what a crashed run left behind.
+static void dylib_sweep_stale_copies(Str path, Str own_marker) {
+  Allocator h = heap();
+  Arena arena = Arena::create(h, 16 * 1024);
+  Allocator a = arena.allocator();
+  Str ext = extension(path);
+  Str dir = parent(path);
+  if (dir.empty()) dir = ".";
+  StrBuf prefix; // "game.live-"
+  prefix.append(stem(path), a);
+  prefix.append(".live-", a);
+
+  Result<Array<DirEntry>> entries = list_dir(dir, a);
+  if (entries) {
+    for (const DirEntry& e : *entries) {
+      Str name = e.name;
+      if (e.kind != PathKind::File || !name.starts_with(prefix.view()) || !name.ends_with(ext))
+        continue;
+      if (name.substr(prefix.len).starts_with(own_marker)) continue; // one of ours, maybe loaded
+      (void)remove(join(dir, name, a)); // fails harmlessly if another process holds it open
+    }
+  }
+  arena.destroy();
+}
+
 Result<Library> Library::load_copy(Str path) {
   static std::atomic<u32> counter{0};
   Allocator h = heap();
 
-  // "dir/game.dll" -> "dir/game.live-<time>-<n>.dll". The extension is kept
-  // because Windows uses it; the time keeps two running games apart.
+  char marker[16]; // "<id>-", shared by every copy this process makes
+  SDL_snprintf(marker, sizeof(marker), "%08x-", dylib_process_id());
+  dylib_sweep_stale_copies(path, marker);
+
+  // "dir/game.dll" -> "dir/game.live-<id>-<n>.dll". The extension is kept
+  // because Windows uses it.
   Str ext = extension(path);
   StrBuf copy;
   copy.append(path.substr(0, path.size() - ext.size()), h);
-  copy.appendf(h, ".live-%08x-%u", static_cast<u32>(SDL_GetTicksNS() ^ static_cast<u64>(wall_clock())),
-               counter.fetch_add(1));
+  copy.appendf(h, ".live-%s%u", marker, counter.fetch_add(1));
   copy.append(ext, h);
 
   detail::CStr cpath(path);
