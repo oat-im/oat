@@ -45,6 +45,8 @@ inline int run_all(int argc, char** argv) {
   for (Test* t = g_tests; t; t = t->next) {
     if (argc > 1 && !std::strstr(t->name, argv[1])) continue;
     int before = g_failures;
+    std::printf("[ run ] %s\n", t->name);
+    std::fflush(stdout); // so a hang or crash shows which test it was in
     t->fn();
     ++ran;
     if (g_failures != before) std::printf("FAILED %s\n", t->name);

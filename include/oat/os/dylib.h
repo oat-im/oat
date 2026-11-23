@@ -10,6 +10,9 @@ namespace oat::os {
 struct Library {
   SDL_SharedObject* handle = nullptr;
 
+  // On Windows, loading a file that is not a valid library can open a system
+  // dialog. A game that hot-reloads should call
+  // SetErrorMode(SEM_FAILCRITICALERRORS) once at start-up.
   [[nodiscard]] static Result<Library> load(Str path);
 
   // The address of an exported function, or nullptr if there is none.
