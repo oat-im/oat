@@ -1,0 +1,203 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  SDL3_REF: release-3.2.0
+  SDL3_NET_REF: release-3.2.0
+
+jobs:
+  # Build, tests and lint for the core library on every supported compiler.
+  core:
+    name: core / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gcc,         os: ubuntu-24.04, cxx: g++-14 }
+          - { name: clang,       os: ubuntu-24.04, cxx: clang++-18 }
+          - { name: apple-clang, os: macos-latest, cxx: clang++ }
+          - { name: msvc,        os: windows-latest, cxx: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX=${{ matrix.cxx }}; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOAT_BUILD_OS=OFF -DOAT_WERROR=ON
+      - name: Build (runs the lint)
+        run: cmake --build build --config Debug
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure
+      - name: Release build and test
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX=${{ matrix.cxx }}; fi
+          cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DOAT_BUILD_OS=OFF -DOAT_WERROR=ON
+          cmake --build build-release --config Release
+          ctest --test-dir build-release -C Release --output-on-failure
+
+  # oat_os and oat_net need SDL3 and SDL3_net, built from source and cached.
+  os-net:
+    name: os and net / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SDL
+        id: sdl
+        uses: actions/cache@v4
+        with:
+          path: sdl-install
+          key: sdl-${{ matrix.os }}-${{ env.SDL3_REF }}-${{ env.SDL3_NET_REF }}
+      - name: Build SDL3 and SDL3_net
+        if: steps.sdl.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git clone --depth 1 --branch $SDL3_REF https://github.com/libsdl-org/SDL.git
+          cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/sdl-install \
+                -DSDL_TEST_LIBRARY=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+          cmake --build SDL/build --config Release --parallel
+          cmake --install SDL/build --config Release
+          git clone --depth 1 --branch $SDL3_NET_REF https://github.com/libsdl-org/SDL_net.git
+          cmake -S SDL_net -B SDL_net/build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX=$PWD/sdl-install -DCMAKE_PREFIX_PATH=$PWD/sdl-install
+          cmake --build SDL_net/build --config Release --parallel
+          cmake --install SDL_net/build --config Release
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then export CXX=g++-14; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$PWD/sdl-install \
+                -DOAT_BUILD_NET=ON -DOAT_WERROR=ON
+      - name: Build
+        run: cmake --build build --config Debug
+      - name: Test
+        shell: bash
+        run: |
+          export PATH="$PWD/sdl-install/bin:$PATH"                         # SDL3.dll on Windows
+          export LD_LIBRARY_PATH="$PWD/sdl-install/lib:$LD_LIBRARY_PATH"   # libSDL3.so on Linux
+          export DYLD_LIBRARY_PATH="$PWD/sdl-install/lib:$DYLD_LIBRARY_PATH"
+          ctest --test-dir build -C Debug --output-on-failure
+
+  # ASan and UBSan on everything; TSan on the threading and job tests.
+  sanitizers:
+    name: sanitizers / ${{ matrix.sanitize }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: ["address,undefined", "thread"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SDL
+        id: sdl
+        uses: actions/cache@v4
+        with:
+          path: sdl-install
+          key: sdl-ubuntu-24.04-${{ env.SDL3_REF }}-${{ env.SDL3_NET_REF }}
+      - name: Build SDL3 and SDL3_net
+        if: steps.sdl.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch $SDL3_REF https://github.com/libsdl-org/SDL.git
+          cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/sdl-install \
+                -DSDL_TEST_LIBRARY=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+          cmake --build SDL/build --parallel && cmake --install SDL/build
+          git clone --depth 1 --branch $SDL3_NET_REF https://github.com/libsdl-org/SDL_net.git
+          cmake -S SDL_net -B SDL_net/build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX=$PWD/sdl-install -DCMAKE_PREFIX_PATH=$PWD/sdl-install
+          cmake --build SDL_net/build --parallel && cmake --install SDL_net/build
+      - name: Build
+        run: |
+          CXX=clang++-18 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$PWD/sdl-install \
+              -DOAT_BUILD_NET=ON -DOAT_WERROR=ON -DOAT_BUILD_EXAMPLES=OFF "-DOAT_SANITIZE=${{ matrix.sanitize }}"
+          cmake --build build
+      - name: Test (ASan and UBSan)
+        if: matrix.sanitize != 'thread'
+        run: |
+          export LD_LIBRARY_PATH="$PWD/sdl-install/lib"
+          UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build --output-on-failure
+      - name: Test (TSan, threads and jobs)
+        if: matrix.sanitize == 'thread'
+        run: |
+          export LD_LIBRARY_PATH="$PWD/sdl-install/lib"
+          for filter in thread mutex condvar jobs; do ./build/oat_os_tests $filter; done
+          ./build/oat_tests arena
+
+  # Fails if including oat.h and instantiating every container for 20 types
+  # gets more than 20% slower than the recorded baseline. The first green run
+  # on the default branch records the baseline.
+  compile-time:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore baseline
+        id: baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: compile-time-baseline.json
+          key: compile-time-baseline-v1
+      - name: Check against baseline
+        if: steps.baseline.outputs.cache-hit == 'true'
+        run: python3 tools/compile_time.py --compiler clang++-18 --check compile-time-baseline.json
+      - name: Record baseline
+        if: steps.baseline.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+        run: python3 tools/compile_time.py --compiler clang++-18 --record compile-time-baseline.json
+      - name: Save baseline
+        if: steps.baseline.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+        uses: actions/cache/save@v4
+        with:
+          path: compile-time-baseline.json
+          key: compile-time-baseline-v1
+      - name: Report
+        run: python3 tools/compile_time.py --compiler clang++-18 --runs 3
+
+  # Not a gate: runs the benchmarks on each platform and puts the tables in the
+  # run summary. Hosted runners are noisy, so read these as rough comparisons.
+  benchmarks:
+    name: benchmarks / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-gcc,   os: ubuntu-24.04,   cxx: g++-14 }
+          - { name: linux-clang, os: ubuntu-24.04,   cxx: clang++-18 }
+          - { name: macos,       os: macos-latest,   cxx: clang++ }
+          - { name: msvc,        os: windows-latest, cxx: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX=${{ matrix.cxx }}; fi
+          build() {
+            rm -rf build-bench
+            cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DOAT_BUILD_BENCH=ON -DOAT_BUILD_OS=OFF \
+                  -DOAT_BUILD_TESTS=OFF -DOAT_BUILD_EXAMPLES=OFF -DOAT_BENCH_EASTL=$1 &&
+            cmake --build build-bench --config Release --target oat_bench_O0 oat_bench_O2
+          }
+          # EASTL may not build on every compiler; fall back to oat against std.
+          build ON || { echo "EASTL did not build here; benchmarking against std only" >> "$GITHUB_STEP_SUMMARY"; build OFF; }
+      - name: Run
+        shell: bash
+        run: |
+          echo "## Benchmarks: ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          for opt in O0 O2; do
+            exe=$(find build-bench -type f \( -name "oat_bench_$opt" -o -name "oat_bench_$opt.exe" \) | head -1)
+            "$exe" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Compile time
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/compile_time.py --compiler ${{ matrix.cxx }} --runs 3 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

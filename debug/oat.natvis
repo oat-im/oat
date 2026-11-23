@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Visual Studio visualizers for the oat containers. Add this file to the
+     project, or copy it to Documents\Visual Studio 2022\Visualizers. -->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+  <Type Name="oat::Array&lt;*&gt;">
+    <DisplayString>{{ len={len} cap={cap} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">len</Item>
+      <Item Name="[cap]" ExcludeView="simple">cap</Item>
+      <ArrayItems>
+        <Size>len</Size>
+        <ValuePointer>data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::FixedArray&lt;*,*&gt;">
+    <DisplayString>{{ len={len} cap={$T2} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">len</Item>
+      <ArrayItems>
+        <Size>len</Size>
+        <ValuePointer>($T1*)storage</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::RingBuffer&lt;*&gt;">
+    <DisplayString>{{ len={len} cap={cap} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">len</Item>
+      <Item Name="[cap]" ExcludeView="simple">cap</Item>
+      <!-- Index 0 is the oldest element. -->
+      <IndexListItems>
+        <Size>len</Size>
+        <ValueNode>data[(head + $i) % cap]</ValueNode>
+      </IndexListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::StrBuf">
+    <DisplayString Condition="data == 0">""</DisplayString>
+    <DisplayString>{data,[len]s8}</DisplayString>
+    <StringView Condition="data != 0">data,[len]s8</StringView>
+    <Expand>
+      <Item Name="[len]">len</Item>
+      <Item Name="[cap]">cap</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::Sym">
+    <DisplayString>{{ id={id} }}</DisplayString>
+  </Type>
+
+  <Type Name="oat::Map&lt;*,*&gt;">
+    <DisplayString>{{ len={raw.len} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">raw.len</Item>
+      <Item Name="[slots]" ExcludeView="simple">raw.cap</Item>
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="i" InitialValue="0"/>
+        <Variable Name="entries" InitialValue="(oat::MapEntry&lt;$T1,$T2&gt;*)raw.entries"/>
+        <Loop>
+          <Break Condition="i &gt;= raw.cap"/>
+          <!-- A stored hash of 0 marks an empty slot. -->
+          <If Condition="raw.hashes[i] != 0">
+            <Item Name="[{entries[i].key}]">entries[i].value</Item>
+          </If>
+          <Exec>i++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::Set&lt;*&gt;">
+    <DisplayString>{{ len={map.raw.len} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">map.raw.len</Item>
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="i" InitialValue="0"/>
+        <Variable Name="entries" InitialValue="(oat::MapEntry&lt;$T1,oat::detail::Unit&gt;*)map.raw.entries"/>
+        <Loop>
+          <Break Condition="i &gt;= map.raw.cap"/>
+          <If Condition="map.raw.hashes[i] != 0">
+            <Item>entries[i].key</Item>
+          </If>
+          <Exec>i++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::Handle&lt;*&gt;">
+    <DisplayString Condition="generation == 0">null</DisplayString>
+    <DisplayString>{{ index={index} generation={generation} }}</DisplayString>
+  </Type>
+
+  <Type Name="oat::Pool&lt;*&gt;">
+    <DisplayString>{{ len={raw.len} }}</DisplayString>
+    <Expand>
+      <Item Name="[len]" ExcludeView="simple">raw.len</Item>
+      <Item Name="[slots]" ExcludeView="simple">raw.slot_count</Item>
+      <!-- Live elements, named by slot index. Chunks hold 64 slots each. -->
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="i" InitialValue="0"/>
+        <Loop>
+          <Break Condition="i &gt;= raw.slot_count"/>
+          <If Condition="((raw.chunks[i / 64]-&gt;live &gt;&gt; (i % 64)) &amp; 1) != 0">
+            <Item Name="[{i}]">(($T1*)((char*)raw.chunks[i / 64] + raw.items_offset))[i % 64]</Item>
+          </If>
+          <Exec>i++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="oat::BitSet">
+    <DisplayString>{{ bits={bit_count} }}</DisplayString>
+    <Expand>
+      <IndexListItems>
+        <Size>bit_count</Size>
+        <ValueNode>(bool)((words[$i / 64] &gt;&gt; ($i % 64)) &amp; 1)</ValueNode>
+      </IndexListItems>
+    </Expand>
+  </Type>
+
+</AutoVisualizer>
