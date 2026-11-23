@@ -171,24 +171,26 @@ In `debug/`, covering `Array`, `FixedArray`, `RingBuffer`, `Map`, `Set`, `StrBuf
 
 ## Status
 
-What has been run, and where:
+What has been run, and where. Linux and Windows results are from CI (`.github/workflows/ci.yml`); macOS was also run locally.
 
-| | macOS (Apple clang 21, arm64) | Linux (GCC, Clang) | Windows (MSVC) |
+| | macOS (Apple Clang) | Linux (GCC 14, Clang 19) | Windows (MSVC) |
 | --- | --- | --- | --- |
-| Build warning-free, all three libraries | yes | not yet run | not yet run |
-| All tests, Debug and Release | yes | not yet run | not yet run |
-| ASan and UBSan | yes | not yet run | n/a |
-| TSan (threads, jobs) | yes | not yet run | n/a |
-| Lint on oat and the sample consumer | yes | not yet run | not yet run |
-| LLDB visualizers | yes | | |
+| Build warning-free (`-Werror` / `/WX`), all three libraries | yes | yes | yes |
+| All tests, Debug; core tests also in Release | yes | yes | yes |
+| ASan and UBSan | yes (local) | yes | n/a |
+| TSan (threads, jobs) | yes (local) | yes | n/a |
+| Lint on oat and the sample consumer | yes | yes | yes |
+| Benchmarks against std and EASTL | yes | yes | yes |
+| Compile-time gate, baseline recorded | | yes (Clang 19) | |
+| LLDB visualizers | yes (local) | | |
 | GDB visualizers, natvis | | written, not yet run | written, not yet run |
 
-`.github/workflows/ci.yml` covers the other columns: core build, tests and lint on GCC, Clang, Apple Clang and MSVC; `oat_os` and `oat_net` on all three systems; sanitizers; the compile-time gate, whose baseline is recorded by the first green run on the default branch; and a benchmarks job that prints these tables for each platform in the run summary.
+The benchmark tables above are from one Apple Silicon machine. The benchmarks CI job prints the same tables for each platform in its run summary; on hosted runners the map and debug-build results hold on all four compilers, and plain `push` at `-O2` is level with or ahead of `std` on Linux and MSVC.
 
 Things verified against the plan's open questions:
 
 - Every SDL3 and SDL3_net function oat calls was checked against the installed headers (SDL 3.4, SDL_net 3.2).
-- `SDL_RenamePath` is documented to replace an existing file, so `write_entire_file` is atomic. Not yet observed on Windows.
+- `SDL_RenamePath` is documented to replace an existing file, so `write_entire_file` is atomic. The Windows tests that overwrite an existing file pass.
 - SDL's file, time, thread and library functions work without `SDL_Init`; the tests never call it. `os::init()` only installs the allocator.
 - On Windows, paths over 260 characters fail unless long paths are enabled (found by CI), and a load of a file that is not a library can open a system dialog unless the application calls `SetErrorMode` (see `os/dylib.h`).
 - SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one.
