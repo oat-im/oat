@@ -45,10 +45,22 @@ struct Library {
 
   // Copies the library next to itself under a unique name
   // ("game.live-<id>-<n>.dll") and loads the copy. unload() deletes the copy.
-  // Copies left behind by an earlier run that crashed are deleted here too.
-  // That sweep removes every "game.live-*" copy this process did not make, so
-  // do not hot-reload the same library file from two running games.
-  [[nodiscard]] static Result<Library> load_copy(Str path);
+  //
+  // Copies left behind by an earlier run that crashed are deleted here too:
+  // any "game.live-*" copy that this process did not make and that is older
+  // than `stale_after_ns` (one minute by default).
+  //
+  // Two processes reloading the same library file (a client and a server
+  // from one build directory) is supported, and the age limit is why. A copy
+  // the other process has already loaded is safe to sweep: on Windows the
+  // delete fails because the file is locked, and on Linux and macOS the file
+  // is unlinked but stays mapped. A copy the other process made a moment ago
+  // and has not loaded yet is not safe to sweep (on macOS, deleting a library
+  // while the loader is validating it was seen to hang that load), and it is
+  // never old enough to be swept. Do not pass a small stale_after_ns when
+  // another process may be reloading the same file.
+  [[nodiscard]] static Result<Library> load_copy(Str path,
+                                                 u64 stale_after_ns = 60ull * 1000 * 1000 * 1000);
 
   // The address of an exported function, or nullptr if there is none.
   void* symbol(const char* name);

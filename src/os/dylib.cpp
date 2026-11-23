@@ -29,8 +29,11 @@ static u32 dylib_process_id() {
 }
 
 // Removes "<stem>.live-*<ext>" files in the library's directory that this
-// process did not create: what a crashed run left behind.
-static void dylib_sweep_stale_copies(Str path, Str own_marker) {
+// process did not create and that are older than `stale_after_ns`: what a
+// crashed run left behind. The age limit is what keeps this from touching a
+// copy another process made a moment ago and is about to load.
+static void dylib_sweep_stale_copies(Str path, Str own_marker, u64 stale_after_ns) {
+  i64 newest_stale = wall_clock() - static_cast<i64>(stale_after_ns);
   Allocator h = heap();
   Arena arena = Arena::create(h, 16 * 1024);
   Allocator a = arena.allocator();
@@ -48,19 +51,22 @@ static void dylib_sweep_stale_copies(Str path, Str own_marker) {
       if (e.kind != PathKind::File || !name.starts_with(prefix.view()) || !name.ends_with(ext))
         continue;
       if (name.substr(prefix.len).starts_with(own_marker)) continue; // one of ours, maybe loaded
-      (void)remove(join(dir, name, a)); // fails harmlessly if another process holds it open
+      Str full = join(dir, name, a);
+      Result<PathInfo> info = path_info(full);
+      if (!info || info->modified_ns > newest_stale) continue; // too fresh to be abandoned
+      (void)remove(full); // fails harmlessly if another process holds it open
     }
   }
   arena.destroy();
 }
 
-Result<Library> Library::load_copy(Str path) {
+Result<Library> Library::load_copy(Str path, u64 stale_after_ns) {
   static std::atomic<u32> counter{0};
   Allocator h = heap();
 
   char marker[16]; // "<id>-", shared by every copy this process makes
   SDL_snprintf(marker, sizeof(marker), "%08x-", dylib_process_id());
-  dylib_sweep_stale_copies(path, marker);
+  dylib_sweep_stale_copies(path, marker, stale_after_ns);
 
   // "dir/game.dll" -> "dir/game.live-<id>-<n>.dll". The extension is kept
   // because Windows uses it.

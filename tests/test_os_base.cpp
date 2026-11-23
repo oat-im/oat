@@ -3,6 +3,8 @@
 #include <oat/oat.h>
 #include <oat/os.h>
 
+#include <cstdlib>
+
 using namespace oat;
 
 // os::init has to run before SDL allocates anything, so it runs before main.
@@ -141,7 +143,22 @@ TEST(os_dylib_load_copy_sweeps_stale_copies) {
   CHECK(os::write_entire_file(stale2.view(), "old").has_value());
   CHECK(os::write_entire_file(unrelated.view(), "keep").has_value());
 
-  Result<os::Library> first = os::Library::load_copy(plugin);
+  // Fresh files are not stale yet: with the default age limit they survive,
+  // which is what protects a copy another process is about to load.
+  Result<os::Library> young = os::Library::load_copy(plugin);
+  CHECK(young.has_value());
+  CHECK(os::exists(stale1.view()) && os::exists(stale2.view()));
+  if (young) {
+    // A copy has a fresh modified time of its own, not the original's, so
+    // the age limit covers it from the moment it is made.
+    Result<os::PathInfo> copy_info = os::path_info(young->copy_path);
+    const i64 second = 1000000000ll;
+    CHECK(copy_info && copy_info->modified_ns > os::wall_clock() - 30 * second);
+    young->unload();
+  }
+
+  // With no age limit, everything this process did not make is swept.
+  Result<os::Library> first = os::Library::load_copy(plugin, 0);
   CHECK(first.has_value());
   CHECK(!os::exists(stale1.view()) && !os::exists(stale2.view()));
   CHECK(os::exists(unrelated.view()));
@@ -149,7 +166,7 @@ TEST(os_dylib_load_copy_sweeps_stale_copies) {
 
   if (first) {
     // The sweep leaves this process's own live copies alone.
-    Result<os::Library> second = os::Library::load_copy(plugin);
+    Result<os::Library> second = os::Library::load_copy(plugin, 0);
     CHECK(second.has_value());
     CHECK(os::exists(first->copy_path));
     auto add = first->symbol_as<int (*)(int, int)>("oat_test_plugin_add");
@@ -159,6 +176,60 @@ TEST(os_dylib_load_copy_sweeps_stale_copies) {
   }
   CHECK(os::remove(unrelated.view()).has_value());
   arena.destroy();
+}
+
+TEST(os_dylib_two_processes_reload_one_library) {
+  // A client and a server run from one build directory and both hot-reload
+  // the same game library. Each process sweeps the other's copies.
+  Result<os::Library> held = os::Library::load_copy(OAT_TEST_PLUGIN_PATH);
+  CHECK(held.has_value());
+  if (!held) return;
+  auto held_add = held->symbol_as<int (*)(int, int)>("oat_test_plugin_add");
+  CHECK(held_add != nullptr);
+
+  // The other process, running at the same time as the loop below.
+  struct Peer {
+    int exit_code = -1;
+  } peer;
+  os::Thread runner = *os::Thread::start(
+      "oat-peer",
+      [](void* p) -> i32 {
+#if defined(_WIN32)
+        // cmd.exe strips one outer pair of quotes from the whole line.
+        const char* command = "\"\"" OAT_TEST_PEER_PATH "\" \"" OAT_TEST_PLUGIN_PATH "\" 40\"";
+#else
+        const char* command = "\"" OAT_TEST_PEER_PATH "\" \"" OAT_TEST_PLUGIN_PATH "\" 40";
+#endif
+        static_cast<Peer*>(p)->exit_code = std::system(command);
+        return 0;
+      },
+      &peer);
+
+  // Meanwhile this process reloads too. Fresh copies are never swept, so
+  // neither process disturbs the other; the retry is there, as in the
+  // recipe, in case a load fails for some other reason.
+  u32 loaded = 0;
+  u32 retries = 0;
+  for (u32 i = 0; i < 40; ++i) {
+    Result<os::Library> lib = os::Library::load_copy(OAT_TEST_PLUGIN_PATH);
+    for (u32 attempt = 0; !lib && attempt < 200; ++attempt) {
+      ++retries;
+      os::sleep_ns(2 * 1000 * 1000);
+      lib = os::Library::load_copy(OAT_TEST_PLUGIN_PATH);
+    }
+    if (!lib) break;
+    auto add = lib->symbol_as<int (*)(int, int)>("oat_test_plugin_add");
+    if (add && add(i, 1) == static_cast<int>(i) + 1) ++loaded;
+    lib->unload();
+  }
+  runner.join();
+  CHECK(loaded == 40);          // every reload here got through
+  CHECK(peer.exit_code == 0);   // and every reload in the other process
+  (void)retries;                // how often the race was lost varies run to run
+
+  // The copy loaded before all of that still works.
+  if (held_add) CHECK(held_add(40, 2) == 42);
+  held->unload();
 }
 
 TEST(os_hot_reload_signal) {

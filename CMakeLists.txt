@@ -138,9 +138,14 @@ if(OAT_BUILD_TESTS)
     # A tiny shared library for the dylib test to load.
     add_library(oat_test_plugin SHARED tests/plugin/plugin.cpp)
     set_target_properties(oat_test_plugin PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET default)
-    add_dependencies(oat_os_tests oat_test_plugin)
+    # A second process that hot-reloads the same plugin as the test.
+    add_executable(oat_reload_peer tests/reload_peer.cpp)
+    target_link_libraries(oat_reload_peer PRIVATE oat_os)
+    oat_internal_warnings(oat_reload_peer)
+    add_dependencies(oat_os_tests oat_test_plugin oat_reload_peer)
     target_compile_definitions(oat_os_tests PRIVATE
-      OAT_TEST_PLUGIN_PATH="$<TARGET_FILE:oat_test_plugin>")
+      OAT_TEST_PLUGIN_PATH="$<TARGET_FILE:oat_test_plugin>"
+      OAT_TEST_PEER_PATH="$<TARGET_FILE:oat_reload_peer>")
   endif()
 
   if(OAT_BUILD_NET)
