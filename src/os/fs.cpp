@@ -28,6 +28,35 @@ bool exists(Str path) {
   return SDL_GetPathInfo(cpath.get(), &info) && info.type != SDL_PATHTYPE_NONE;
 }
 
+bool FileChange::poll(Str path, u32 settle_polls) {
+  detail::CStr cpath(path);
+  SDL_PathInfo info;
+  if (!SDL_GetPathInfo(cpath.get(), &info) || info.type != SDL_PATHTYPE_FILE) {
+    settled = 0; // missing for a moment while it is being replaced
+    return false;
+  }
+  i64 now_time = info.modify_time;
+  u64 now_size = info.size;
+  if (!primed) {
+    primed = true;
+    known_ns = seen_ns = now_time;
+    known_size = seen_size = now_size;
+    return false;
+  }
+  if (now_time != seen_ns || now_size != seen_size) {
+    seen_ns = now_time; // still changing: start counting again
+    seen_size = now_size;
+    settled = 0;
+    return false;
+  }
+  if (seen_ns == known_ns && seen_size == known_size) return false;
+  if (++settled < settle_polls) return false;
+  known_ns = seen_ns;
+  known_size = seen_size;
+  settled = 0;
+  return true;
+}
+
 struct ListDirState {
   Array<DirEntry>* entries;
   Allocator* allocator;

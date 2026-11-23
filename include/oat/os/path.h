@@ -17,18 +17,20 @@ Str extension(Str path);
 // The last component without its extension: "a/b.tar.gz" -> "b.tar".
 Str stem(Str path);
 
-// Everything before the last component: "a/b/c" -> "a/b", "/a" -> "/", "a" -> "".
+// Everything before the last component: "a/b/c" -> "a/b", "/a" -> "/",
+// "C:/a" -> "C:/", "a" -> "".
 Str parent(Str path);
 
 bool is_absolute(Str path);
 
 // a + "/" + b, without doubling the separator. If b is absolute the result is
-// b. The result is allocated from `a` and NUL-terminated.
+// b. Any '\' becomes '/'. The result is allocated from `a` and NUL-terminated.
 Str join(Str left, Str right, Allocator& a);
 
 // Turns '\' into '/', collapses repeated separators, and resolves "." and
 // ".." components where it can ("a/./b/../c" -> "a/c"). A leading ".." that
-// cannot be resolved is kept. The result is allocated from `a` and
+// cannot be resolved is kept. A root is never popped: "/", "C:/", or the
+// "//server/share" of a UNC path. The result is allocated from `a` and
 // NUL-terminated; an empty result is ".".
 Str normalize(Str path, Allocator& a);
 

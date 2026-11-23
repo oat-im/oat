@@ -86,6 +86,39 @@ TEST(os_dylib) {
   path.free(h);
 }
 
+TEST(os_dylib_load_copy) {
+  // The copy is what gets loaded, so the original stays free to be rebuilt.
+  Result<os::Library> lib = os::Library::load_copy(OAT_TEST_PLUGIN_PATH);
+  CHECK(lib.has_value());
+  if (lib) {
+    CHECK(lib->copy_path != nullptr);
+    Str copy(lib->copy_path);
+    CHECK(copy != Str(OAT_TEST_PLUGIN_PATH));
+    CHECK(os::extension(copy) == os::extension(OAT_TEST_PLUGIN_PATH));
+    CHECK(os::parent(copy) == os::parent(OAT_TEST_PLUGIN_PATH));
+    CHECK(os::exists(copy));
+    auto add = lib->symbol_as<int (*)(int, int)>("oat_test_plugin_add");
+    CHECK(add != nullptr);
+    if (add) CHECK(add(1, 2) == 3);
+
+    // A second copy can be loaded while the first is in use: this is a reload.
+    Result<os::Library> next = os::Library::load_copy(OAT_TEST_PLUGIN_PATH);
+    CHECK(next.has_value());
+    if (next) {
+      CHECK(Str(next->copy_path) != copy);
+      next->unload();
+    }
+
+    Allocator h = heap();
+    const char* copy_name = to_cstr(copy, h);
+    lib->unload();
+    CHECK(lib->copy_path == nullptr);
+    CHECK(!os::exists(copy_name)); // unload cleans the copy up
+    h.free(const_cast<char*>(copy_name), copy.size() + 1);
+  }
+  CHECK(os::Library::load_copy("/no/such/dir/libmissing.so").error() == Error::NotFound);
+}
+
 TEST(os_hot_reload_signal) {
   // dylib plus a modification time is all hot reload needs.
   Result<os::PathInfo> info = os::path_info(OAT_TEST_PLUGIN_PATH);

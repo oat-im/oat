@@ -146,7 +146,7 @@ TEST(bounds_against_std) {
 }
 
 TEST(hash_bytes_matches_wyhash) {
-  // Values produced by the reference wyhash.h (final version 4.3), default
+  // Values produced by the reference wyhash.h (wyhash_final_version_4_3), default
   // secret, seed 0, for the messages its own test program uses. They cover
   // every length class: 0, 1-3, 4-16, 17-47 and 48 or more.
   struct Vector {

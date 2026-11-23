@@ -218,6 +218,41 @@ TEST(fs_directories) {
   CHECK(!os::exists(tmp.path("a/b/c")));
 }
 
+TEST(fs_file_change) {
+  TempDir tmp("oat_tmp_change");
+  Str path = tmp.path("game.lib");
+  os::FileChange change;
+  CHECK(!change.poll(path)); // nothing there yet
+
+  CHECK(os::write_entire_file(path, "version one").has_value());
+  CHECK(!change.poll(path)); // the first sighting is the baseline, not a change
+  for (u32 i = 0; i < 5; ++i) CHECK(!change.poll(path));
+
+  // A rewrite is reported once, and only after it has settled.
+  CHECK(os::write_entire_file(path, "version two, longer").has_value());
+  CHECK(!change.poll(path, 3)); // sees the new state
+  CHECK(!change.poll(path, 3)); // settled 1
+  CHECK(!change.poll(path, 3)); // settled 2
+  CHECK(change.poll(path, 3));  // settled 3: reported
+  for (u32 i = 0; i < 5; ++i) CHECK(!change.poll(path, 3));
+
+  // A file that keeps changing is not reported until it stops.
+  CHECK(os::write_entire_file(path, "3").has_value());
+  CHECK(!change.poll(path, 2));
+  CHECK(!change.poll(path, 2));
+  CHECK(os::write_entire_file(path, "3 and more").has_value()); // the linker is still going
+  CHECK(!change.poll(path, 2));                                 // counting starts over
+  CHECK(!change.poll(path, 2));
+  CHECK(change.poll(path, 2));
+
+  // Vanishing for a moment (replace by delete and create) is not a change by itself.
+  CHECK(os::remove(path).has_value());
+  CHECK(!change.poll(path, 1));
+  CHECK(os::write_entire_file(path, "4th version").has_value());
+  CHECK(!change.poll(path, 1));
+  CHECK(change.poll(path, 1));
+}
+
 TEST(fs_long_and_unicode_paths) {
   TempDir tmp("oat_tmp_paths");
   // UTF-8 names round-trip through the file system.

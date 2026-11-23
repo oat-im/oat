@@ -29,6 +29,9 @@ TEST(path_parts) {
   CHECK(os::parent("a/b/c") == "a/b");
   CHECK(os::parent("a/b/") == "a/b");
   CHECK(os::parent("/a") == "/");
+  CHECK(os::parent("C:/saves") == "C:/"); // the drive's root, not "C:"
+  CHECK(os::parent("C:/saves/slot1") == "C:/saves");
+  CHECK(os::parent("C:/") == "C:/");
   CHECK(os::parent("a") == "");
   CHECK(os::parent("") == "");
 
@@ -51,6 +54,10 @@ TEST(path_join_normalize) {
   CHECK(join("a", "") == "a");
   CHECK(join("a", "/abs") == "/abs");
   CHECK(join("/", "x") == "/x");
+  CHECK(join("a\\b", "c\\d") == "a/b/c/d"); // backslashes never survive
+  CHECK(join("a\\", "c") == "a/c");
+  CHECK(join("", "c\\d") == "c/d");
+  CHECK(join("a\\b", "") == "a/b");
   std::string_view joined = join("assets", "tex.png");
   CHECK(joined.data()[joined.size()] == '\0');
 
@@ -68,7 +75,15 @@ TEST(path_join_normalize) {
   CHECK(norm("/a/../..") == "/");
   CHECK(norm("/../a") == "/a");
   CHECK(norm("/") == "/");
-  CHECK(norm("//a//b") == "/a/b");
+  CHECK(norm("/a//b") == "/a/b");
+  CHECK(norm("///a//b") == "/a/b"); // three or more is not UNC
+  // UNC paths keep their "//server/share" root, and ".." cannot climb out of it.
+  CHECK(norm("//server/share") == "//server/share");
+  CHECK(norm("\\\\server\\share\\dir\\file.txt") == "//server/share/dir/file.txt");
+  CHECK(norm("//server/share/a/../b//c/") == "//server/share/b/c");
+  CHECK(norm("//server/share/..") == "//server/share");
+  CHECK(norm("//server/share/../../x") == "//server/share/x");
+  CHECK(norm("//server") == "//server");
   CHECK(norm("C:\\Games\\..\\Saves\\") == "C:/Saves");
   CHECK(norm("C:/..") == "C:/");
   CHECK(norm("C:") == "C:");

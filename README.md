@@ -88,9 +88,9 @@ oat is built on a handful of standard types. They are aliased in `oat/base.h`, a
 
 **`algo.h`** `sort` (introsort), `sort_stable`, `radix_sort`, `lower_bound`, `upper_bound`, `hash_bytes`, `hash_u64`, `hash_combine`, `Rng` (xoshiro256**).
 
-**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (synced to disk, then renamed into place), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` (hot reload: poll `path_info(...).modified_ns` once a frame).
+**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (synced to disk, then renamed into place), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` with `load_copy`, and `FileChange` to poll for a finished rebuild (the hot-reload recipe is at the top of `os/dylib.h`).
 
-**`net.h`** `net::resolve`, `TcpListener`, `TcpStream`, `UdpSocket`, `wait_for_input`.
+**`net.h`** `net::resolve` (with a timeout), `TcpListener` (all addresses or one), `TcpStream` (`drain` before `close`, or queued data is dropped), `UdpSocket`, `wait_for_input`. Writes queue without limit, so backpressure is the caller's job (`pending_writes`).
 
 The rules every type and call site must follow are in [PRECONDITIONS.md](PRECONDITIONS.md). The short version: elements are moved with `memcpy`, containers never run destructors, and nothing holds a pointer across growth.
 
@@ -195,7 +195,8 @@ Things verified against the plan's open questions:
 - `SDL_RenamePath` is documented to replace an existing file, and the Windows tests that overwrite one pass. `write_entire_file` calls `SDL_FlushIO` before the rename, which SDL implements as `fdatasync`, `F_FULLFSYNC` on Apple systems and `FlushFileBuffers` on Windows (read from SDL's source; `SDL_CloseIO` alone does not sync). So a power cut leaves the old file or the new one, never an empty one. Whether the rename itself is durable at that instant is up to the file system.
 - SDL's file, time, thread and library functions work without `SDL_Init`; the tests never call it. `os::init()` only installs the allocator.
 - On Windows, paths over 260 characters fail unless long paths are enabled (found by CI), and a load of a file that is not a library can open a system dialog unless the application calls `SetErrorMode` (see `os/dylib.h`).
-- SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one.
+- SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one, and for anything over the 65,507-byte UDP payload limit.
+- Error codes from `oat_os` are a best guess, because SDL only reports text: see the note at the top of `os/fs.h`.
 - SDL3_net has no call to read back the port chosen for port 0.
 - `hash_bytes` is wyhash (final version 4.3, public domain under The Unlicense), transcribed without changes and checked against the reference code on 120,000 random inputs plus fixed vectors in the tests. `hash_u64` is the splitmix64 finalizer. Nothing was ported from EASTL.
 - Minimum compilers: GCC 14, Visual Studio 2022 17.8, and Clang 19 when Clang is used with libstdc++ (Clang 18 does not enable libstdc++'s `<expected>`). On GCC, `__has_trivial_destructor` is used where Clang and MSVC have `__is_trivially_destructible`.

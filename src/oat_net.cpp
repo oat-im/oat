@@ -25,6 +25,11 @@ Str Address::text() const {
   return s ? Str(s) : Str();
 }
 
+bool Address::same_host(const Address& other) const {
+  if (!handle || !other.handle) return handle == other.handle;
+  return NET_CompareAddresses(handle, other.handle) == 0;
+}
+
 Address Address::retain() const {
   Address a;
   a.handle = handle ? NET_RefAddress(handle) : nullptr;
@@ -36,14 +41,18 @@ void Address::release() {
   handle = nullptr;
 }
 
-Result<Address> resolve(Str host) {
+Result<Address> resolve(Str host, i32 timeout_ms) {
   os::detail::CStr chost(host);
   NET_Address* address = NET_ResolveHostname(chost.get());
   if (!address) return fail(Error::Unknown);
-  if (NET_WaitUntilResolved(address, -1) != NET_SUCCESS) {
-    os::detail::set_error_text(SDL_GetError());
+  NET_Status status = NET_WaitUntilResolved(address, timeout_ms < 0 ? -1 : timeout_ms);
+  if (status != NET_SUCCESS) {
+    os::detail::set_error_text(status == NET_WAITING ? "address resolution timed out"
+                                                     : SDL_GetError());
+    // Dropping our reference is safe while the lookup is still running;
+    // SDL_net keeps its own until the lookup ends.
     NET_UnrefAddress(address);
-    return err(Error::NotFound);
+    return err(status == NET_WAITING ? Error::Timeout : Error::NotFound);
   }
   Address a;
   a.handle = address;
@@ -99,13 +108,20 @@ u32 TcpStream::pending_writes() {
   return n > 0 ? static_cast<u32>(n) : 0;
 }
 
+Result<u32> TcpStream::drain(i32 timeout_ms) {
+  OAT_ASSERT(handle != nullptr);
+  int left = NET_WaitUntilStreamSocketDrained(handle, timeout_ms < 0 ? -1 : timeout_ms);
+  if (left < 0) return fail(Error::Io);
+  return static_cast<u32>(left);
+}
+
 void TcpStream::close() {
   if (handle) NET_DestroyStreamSocket(handle);
   handle = nullptr;
 }
 
-Result<TcpListener> TcpListener::listen(u16 port) {
-  NET_Server* server = NET_CreateServer(nullptr, port, 0);
+Result<TcpListener> TcpListener::listen(u16 port, const Address* local) {
+  NET_Server* server = NET_CreateServer(local ? local->handle : nullptr, port, 0);
   if (!server) return fail(Error::Io);
   TcpListener l;
   l.handle = server;
@@ -131,8 +147,8 @@ void TcpListener::close() {
 // UDP
 // ---------------------------------------------------------------------------
 
-Result<UdpSocket> UdpSocket::bind(u16 port) {
-  NET_DatagramSocket* sock = NET_CreateDatagramSocket(nullptr, port, 0);
+Result<UdpSocket> UdpSocket::bind(u16 port, const Address* local) {
+  NET_DatagramSocket* sock = NET_CreateDatagramSocket(local ? local->handle : nullptr, port, 0);
   if (!sock) return fail(Error::Io);
   UdpSocket u;
   u.handle = sock;
@@ -141,9 +157,10 @@ Result<UdpSocket> UdpSocket::bind(u16 port) {
 
 Result<void> UdpSocket::send(const Address& address, u16 port, Span<const u8> bytes) {
   OAT_ASSERT(handle != nullptr && address.handle != nullptr);
-  // SDL_net rejects empty datagrams, and nothing larger fits in a UDP packet.
-  if (bytes.empty() || bytes.size() > 65535)
-    return fail(Error::InvalidArgument, "a datagram must be 1 to 65535 bytes");
+  // SDL_net rejects empty datagrams, and nothing larger fits in a UDP packet
+  // over IPv4 (65,535 minus the IP and UDP headers).
+  if (bytes.empty() || bytes.size() > MAX_DATAGRAM_SIZE)
+    return fail(Error::InvalidArgument, "a datagram must be 1 to 65507 bytes");
   if (!NET_SendDatagram(handle, address.handle, port, bytes.data(), static_cast<int>(bytes.size())))
     return fail(Error::Io);
   return {};
@@ -155,12 +172,9 @@ Result<Datagram> UdpSocket::receive(Span<u8> buffer) {
   if (!NET_ReceiveDatagram(handle, &dgram)) return fail(Error::Io);
   if (!dgram) return err(Error::WouldBlock);
 
-  // Keep the sender's address alive until the next receive.
-  if (last_from) NET_UnrefAddress(last_from);
-  last_from = NET_RefAddress(dgram->addr);
-
+  // The datagram's own reference dies with it below; this one is the caller's.
   Datagram out;
-  out.from.handle = last_from;
+  out.from.handle = NET_RefAddress(dgram->addr);
   out.port = dgram->port;
   usize size = static_cast<usize>(dgram->buflen);
   out.truncated = size > buffer.size();
@@ -172,8 +186,6 @@ Result<Datagram> UdpSocket::receive(Span<u8> buffer) {
 }
 
 void UdpSocket::close() {
-  if (last_from) NET_UnrefAddress(last_from);
-  last_from = nullptr;
   if (handle) NET_DestroyDatagramSocket(handle);
   handle = nullptr;
 }

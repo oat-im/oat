@@ -1,4 +1,7 @@
 // oat/os/file.h - file I/O.
+//
+// Error codes are a best guess made by inspecting the path after SDL reports
+// a failure; see the note at the top of os/fs.h.
 #pragma once
 
 #include "../base.h"

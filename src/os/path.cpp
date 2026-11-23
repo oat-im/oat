@@ -30,6 +30,9 @@ Str parent(Str path) {
   usize slash = path.rfind('/');
   if (slash == Str::npos) return Str();
   if (slash == 0) return path.substr(0, 1);
+  // "C:/saves" -> "C:/". Plain "C:" would mean the current directory on that
+  // drive, not its root.
+  if (slash == 2 && path_has_drive(path)) return path.substr(0, 3);
   return path.substr(0, slash);
 }
 
@@ -41,7 +44,7 @@ bool is_absolute(Str path) {
 Str join(Str left, Str right, Allocator& a) {
   if (left.empty() || is_absolute(right)) return detail::copy_path(right, a);
   if (right.empty()) return detail::copy_path(left, a);
-  bool need_slash = left.back() != '/';
+  bool need_slash = left.back() != '/' && left.back() != '\\';
   usize size = left.size() + (need_slash ? 1 : 0) + right.size();
   char* p = static_cast<char*>(a.alloc(size + 1, 1));
   std::memcpy(p, left.data(), left.size());
@@ -49,6 +52,9 @@ Str join(Str left, Str right, Allocator& a) {
   if (need_slash) p[at++] = '/';
   std::memcpy(p + at, right.data(), right.size());
   p[size] = '\0';
+  // Like the early returns above, the result always uses '/'.
+  for (usize i = 0; i < size; ++i)
+    if (p[i] == '\\') p[i] = '/';
   return Str(p, size);
 }
 
@@ -65,8 +71,23 @@ Str normalize(Str path, Allocator& a) {
     out[len++] = ':';
     i = 2;
   }
-  bool rooted = i < path.size() && (path[i] == '/' || path[i] == '\\');
+  auto is_sep = [&](usize at) { return at < path.size() && (path[at] == '/' || path[at] == '\\'); };
+  bool rooted = is_sep(i);
   if (rooted) out[len++] = '/';
+  // A UNC path, "//server/share/...": the two leading separators and the
+  // server and share names are the root.
+  bool unc = i == 0 && is_sep(0) && is_sep(1) && !is_sep(2) && path.size() > 2;
+  if (unc) {
+    out[len++] = '/';
+    i = 2;
+    for (int part = 0; part < 2 && i < path.size(); ++part) {
+      if (part == 1) out[len++] = '/';
+      while (i < path.size() && !is_sep(i)) out[len++] = path[i++];
+      while (is_sep(i)) ++i;
+    }
+    // Components that follow need a separator after the root.
+    if (i < path.size()) out[len++] = '/';
+  }
   usize root_len = len;
 
   while (i < path.size()) {
@@ -92,6 +113,7 @@ Str normalize(Str path, Allocator& a) {
     len += part.size();
   }
 
+  if (unc && len == root_len && len > 2 && out[len - 1] == '/') --len; // "//server/share"
   if (len == 0) out[len++] = '.';
   out[len] = '\0';
   return Str(out, len);

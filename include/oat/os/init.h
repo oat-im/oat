@@ -14,7 +14,8 @@ namespace oat::os {
 [[nodiscard]] Result<void> init();
 
 // SDL reports failures as text, with no code. After an oat::os function
-// returns an error, this is SDL's message for it. Per thread, and valid until
+// returns an error, this is SDL's message for it. The Error code oat returns
+// is its best reading of the situation; this text is what actually happened. Per thread, and valid until
 // the calling thread's next oat::os call.
 Str last_error_text();
 

@@ -46,8 +46,17 @@ TEST(net_resolve) {
   CHECK(named.has_value());
   if (named) named->release();
 
-  Result<net::Address> bad = net::resolve("no-such-host.invalid");
-  CHECK(!bad && bad.error() == Error::NotFound);
+  // A name that cannot resolve fails, by answer or by running out of time.
+  Result<net::Address> bad = net::resolve("no-such-host.invalid", 5000);
+  CHECK(!bad && (bad.error() == Error::NotFound || bad.error() == Error::Timeout));
+
+  // same_host compares hosts, not handles.
+  net::Address a = *net::resolve("127.0.0.1", 1000);
+  net::Address b = *net::resolve("127.0.0.1", 1000);
+  CHECK(a.handle != nullptr && a.same_host(b) && b.same_host(a));
+  CHECK(!a.same_host(net::Address{}) && net::Address{}.same_host(net::Address{}));
+  a.release();
+  b.release();
 }
 
 TEST(net_tcp_loopback) {
@@ -107,16 +116,55 @@ TEST(net_tcp_loopback) {
   payload.free(h);
   received.free(h);
 
-  // When one side closes, the other side's read reports it.
+  // close() throws away anything still queued, so the last message is
+  // drained first. Then it arrives even though the sender is gone.
+  CHECK(server->write(as_bytes("goodbye")).has_value());
+  Result<u32> left = server->drain(5000);
+  CHECK(left && *left == 0);
+  server->close();
+  CHECK(server->handle == nullptr);
+  Array<u8> farewell;
+  Result<u32> last = poll([&] { return client->read(buf); });
+  while (last) {
+    farewell.push_many(Span<const u8>(buf, *last), h);
+    last = poll([&] { return client->read(buf); });
+  }
+  CHECK(farewell.len == 7 && std::memcmp(farewell.data, "goodbye", 7) == 0);
+  farewell.free(h);
+
+  // Once the data is read, the closed connection reports itself.
+  CHECK(last.error() == Error::Io);
+  CHECK(!os::last_error_text().empty());
   client->close();
   CHECK(client->handle == nullptr);
-  Result<u32> after_close = poll([&] { return server->read(buf); });
-  CHECK(!after_close && after_close.error() == Error::Io);
-  CHECK(!os::last_error_text().empty());
 
-  server->close();
   listener->close();
   addr.release();
+}
+
+TEST(net_tcp_listen_on_one_address) {
+  // Bound to loopback only: reachable from this machine, not from the network.
+  net::Address loopback = *net::resolve("127.0.0.1");
+  Result<net::TcpListener> listener = net::TcpListener::listen(47634, &loopback);
+  CHECK(listener.has_value());
+  if (listener) {
+    Result<net::TcpStream> client = net::TcpStream::connect(loopback, 47634);
+    CHECK(client.has_value());
+    if (client) {
+      CHECK(poll([&] { return client->connect_status(); }).has_value());
+      Result<net::TcpStream> server = poll([&] { return listener->accept(); });
+      CHECK(server.has_value());
+      if (server) {
+        // Nothing queued: drain has nothing to wait for.
+        Result<u32> left = server->drain(0);
+        CHECK(left && *left == 0);
+        server->close();
+      }
+      client->close();
+    }
+    listener->close();
+  }
+  loopback.release();
 }
 
 TEST(net_tcp_connect_refused) {
@@ -155,17 +203,38 @@ TEST(net_udp_loopback) {
     CHECK(got->size == 5 && !got->truncated && std::memcmp(buf, "hello", 5) == 0);
     CHECK(got->port == UDP_PORT_A);
     CHECK(got->from.text() == "127.0.0.1");
-    // Reply to whoever sent it.
+    CHECK(got->from.same_host(addr));
+    // Reply to whoever sent it. The sender's address is ours to release.
     CHECK(b->send(got->from, got->port, as_bytes("world!")).has_value());
+    got->from.release();
   }
   Result<net::Datagram> reply = poll([&] { return a->receive(buf); });
   CHECK(reply && reply->size == 6 && reply->port == UDP_PORT_B && std::memcmp(buf, "world!", 6) == 0);
+  if (reply) reply->from.release();
 
   // A packet larger than the buffer is cut, and says so.
   CHECK(a->send(addr, UDP_PORT_B, as_bytes("0123456789")).has_value());
   u8 tiny[4];
   Result<net::Datagram> cut = poll([&] { return b->receive(tiny); });
   CHECK(cut && cut->size == 4 && cut->truncated && std::memcmp(tiny, "0123", 4) == 0);
+  if (cut) {
+    // A copy of the socket shares the handle and nothing else, so receiving
+    // through either copy is safe.
+    net::UdpSocket b_copy = *b;
+    CHECK(a->send(addr, UDP_PORT_B, as_bytes("x")).has_value());
+    Result<net::Datagram> via_copy = poll([&] { return b_copy.receive(buf); });
+    CHECK(via_copy && via_copy->size == 1);
+    if (via_copy) via_copy->from.release();
+    cut->from.release();
+  }
+
+  // Larger than any UDP datagram can be: refused before it reaches the system.
+  Allocator h = heap();
+  Array<u8> too_big;
+  too_big.resize(net::MAX_DATAGRAM_SIZE + 1, h);
+  Result<void> oversize = a->send(addr, UDP_PORT_B, too_big.span());
+  CHECK(!oversize && oversize.error() == Error::InvalidArgument);
+  too_big.free(h);
 
   // Empty datagrams are rejected up front.
   Result<void> empty = a->send(addr, UDP_PORT_B, std::span<const u8>());

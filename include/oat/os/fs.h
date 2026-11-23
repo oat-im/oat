@@ -1,5 +1,12 @@
 // oat/os/fs.h - directories and file metadata.
 //
+// Error codes here are a best guess. SDL reports failures as text only, so
+// oat picks the code by looking at the path afterwards: path_info says
+// NotFound for any failure to read the metadata, and a failed open of a file
+// that exists says PermissionDenied even when the real cause is a sharing
+// violation or running out of file handles. Branch on the code for the common
+// cases; os::last_error_text() is the truth.
+//
 // On Windows, paths longer than 260 characters fail unless long paths are
 // enabled for the machine and in the application's manifest.
 #pragma once
@@ -21,6 +28,21 @@ struct PathInfo {
 // NotFound if nothing is there.
 [[nodiscard]] Result<PathInfo> path_info(Str path);
 bool exists(Str path);
+
+// Notices when a file has been rewritten, by polling: no OS file watching.
+// Call poll() once a frame. It returns true once per new version, and only
+// after the file has looked the same for `settle_polls` calls in a row, so a
+// file that is still being written is not reported early.
+struct FileChange {
+  i64 known_ns = 0; // the version last reported (or first seen)
+  u64 known_size = 0;
+  i64 seen_ns = 0; // what the previous poll saw
+  u64 seen_size = 0;
+  u32 settled = 0;
+  bool primed = false;
+
+  bool poll(Str path, u32 settle_polls = 3);
+};
 
 struct DirEntry {
   Str name; // one component, no directory; NUL-terminated

@@ -9,8 +9,10 @@ namespace oat {
 // ---------------------------------------------------------------------------
 // hash_bytes
 //
-// This is wyhash (final version 4.3) by Wang Yi, with its default secret and a
-// seed of 0: https://github.com/wangyi-fudan/wyhash. The author released it
+// This is wyhash by Wang Yi, with its default secret and a seed of 0:
+// https://github.com/wangyi-fudan/wyhash. It follows the header on that
+// repository's master branch, whose include guard reads
+// wyhash_final_version_4_3 (the file has no other version string). The author released it
 // into the public domain under The Unlicense. It is transcribed without
 // changes to the algorithm, so its published quality results (SMHasher) apply,
 // and tests/test_algo.cpp checks it against values from the reference code.

@@ -23,6 +23,11 @@ struct JobGroup {
   // Returns once every job submitted with this group has finished. The
   // calling thread runs queued jobs while it waits, so calling this from
   // inside a job is fine.
+  //
+  // Helping means a job run from here can itself wait, and run another job
+  // that waits, each level on the same stack. A few levels deep, as in
+  // parallel_for inside a job, is fine. Do not build unbounded chains of
+  // jobs that wait on jobs.
   void wait();
 };
 
