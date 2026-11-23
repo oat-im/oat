@@ -28,7 +28,8 @@ endif()
 # Warnings for oat's own targets. Not propagated to consumers.
 function(oat_internal_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
+    # C4611: the tests use setjmp to recover from an expected assert.
+    target_compile_options(${target} PRIVATE /W4 /wd4611)
     if(OAT_WERROR)
       target_compile_options(${target} PRIVATE /WX)
     endif()

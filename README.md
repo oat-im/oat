@@ -193,7 +193,7 @@ Things verified against the plan's open questions:
 - SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one.
 - SDL3_net has no call to read back the port chosen for port 0.
 - `hash_bytes` is written for oat on the multiply-and-fold idea of wyhash (public domain). Nothing was ported from EASTL, so no third-party notice is needed.
-- Minimum compilers are as planned (GCC 14, Clang 18, Visual Studio 2022 17.8) but unconfirmed until CI runs. On GCC, `__has_trivial_destructor` is used where Clang and MSVC have `__is_trivially_destructible`.
+- Minimum compilers: GCC 14, Visual Studio 2022 17.8, and Clang 19 when Clang is used with libstdc++ (Clang 18 does not enable libstdc++'s `<expected>`). On GCC, `__has_trivial_destructor` is used where Clang and MSVC have `__is_trivially_destructible`.
 
 ## License
 

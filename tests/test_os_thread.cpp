@@ -210,7 +210,7 @@ TEST(jobs_parallel_for) {
               100, 10,
               [](void* q, u32 begin, u32 end) {
                 u64 local = 0;
-                for (u32 i = begin; i < end; ++i) local += i;
+                for (u32 k = begin; k < end; ++k) local += k;
                 static_cast<Nested*>(q)->sum.fetch_add(local);
               },
               n);

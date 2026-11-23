@@ -18,11 +18,14 @@ jobs:
       matrix:
         include:
           - { name: gcc,         os: ubuntu-24.04, cxx: g++-14 }
-          - { name: clang,       os: ubuntu-24.04, cxx: clang++-18 }
+          - { name: clang,       os: ubuntu-24.04, cxx: clang++-19 }
           - { name: apple-clang, os: macos-latest, cxx: clang++ }
           - { name: msvc,        os: windows-latest, cxx: "" }
     steps:
       - uses: actions/checkout@v4
+      - name: Install Clang 19
+        if: matrix.cxx == 'clang++-19'
+        run: sudo apt-get update && sudo apt-get install -y clang-19
       - name: Configure
         shell: bash
         run: |
@@ -113,9 +116,11 @@ jobs:
           cmake -S SDL_net -B SDL_net/build -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX=$PWD/sdl-install -DCMAKE_PREFIX_PATH=$PWD/sdl-install
           cmake --build SDL_net/build --parallel && cmake --install SDL_net/build
+      - name: Install Clang 19
+        run: sudo apt-get update && sudo apt-get install -y clang-19
       - name: Build
         run: |
-          CXX=clang++-18 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$PWD/sdl-install \
+          CXX=clang++-19 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$PWD/sdl-install \
               -DOAT_BUILD_NET=ON -DOAT_WERROR=ON -DOAT_BUILD_EXAMPLES=OFF "-DOAT_SANITIZE=${{ matrix.sanitize }}"
           cmake --build build
       - name: Test (ASan and UBSan)
@@ -137,6 +142,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install Clang 19
+        run: sudo apt-get update && sudo apt-get install -y clang-19
       - name: Restore baseline
         id: baseline
         uses: actions/cache/restore@v4
@@ -145,10 +152,10 @@ jobs:
           key: compile-time-baseline-v1
       - name: Check against baseline
         if: steps.baseline.outputs.cache-hit == 'true'
-        run: python3 tools/compile_time.py --compiler clang++-18 --check compile-time-baseline.json
+        run: python3 tools/compile_time.py --compiler clang++-19 --check compile-time-baseline.json
       - name: Record baseline
         if: steps.baseline.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
-        run: python3 tools/compile_time.py --compiler clang++-18 --record compile-time-baseline.json
+        run: python3 tools/compile_time.py --compiler clang++-19 --record compile-time-baseline.json
       - name: Save baseline
         if: steps.baseline.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
         uses: actions/cache/save@v4
@@ -156,7 +163,7 @@ jobs:
           path: compile-time-baseline.json
           key: compile-time-baseline-v1
       - name: Report
-        run: python3 tools/compile_time.py --compiler clang++-18 --runs 3
+        run: python3 tools/compile_time.py --compiler clang++-19 --runs 3
 
   # Not a gate: runs the benchmarks on each platform and puts the tables in the
   # run summary. Hosted runners are noisy, so read these as rough comparisons.
@@ -168,11 +175,14 @@ jobs:
       matrix:
         include:
           - { name: linux-gcc,   os: ubuntu-24.04,   cxx: g++-14 }
-          - { name: linux-clang, os: ubuntu-24.04,   cxx: clang++-18 }
+          - { name: linux-clang, os: ubuntu-24.04,   cxx: clang++-19 }
           - { name: macos,       os: macos-latest,   cxx: clang++ }
           - { name: msvc,        os: windows-latest, cxx: "" }
     steps:
       - uses: actions/checkout@v4
+      - name: Install Clang 19
+        if: matrix.cxx == 'clang++-19'
+        run: sudo apt-get update && sudo apt-get install -y clang-19
       - name: Build
         shell: bash
         run: |
