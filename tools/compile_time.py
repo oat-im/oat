@@ -2,12 +2,19 @@
 """Times how long the compiler takes on the oat compile-time probe.
 
   compile_time.py                      print the timings
-  compile_time.py --record FILE        write the oat timing to FILE as the baseline
+  compile_time.py --record FILE        write the baseline to FILE
   compile_time.py --check FILE         fail if oat is more than 20% slower than FILE
 
-Each file is compiled several times and the fastest run counts, which filters
-out noise from a busy machine. With Clang the time is read from -ftime-trace
-(the compiler's own total); other compilers fall back to wall-clock time.
+Machines differ, and CI runners differ from run to run, so the number that is
+recorded and checked is a ratio: the oat probe's time divided by the time of
+the standard-library probe compiled on the same machine in the same run. The
+std probe is the yardstick; only oat's side of the ratio changes when oat does.
+
+Each file is compiled several times, alternating between the two, and the
+fastest run of each counts, which filters out noise from a busy machine. With
+Clang the time is read from -ftime-trace (the compiler's own total); other
+compilers fall back to wall-clock time. Pass options that start with a dash
+with an equals sign: --opt=-O2.
 """
 import argparse
 import json
@@ -24,28 +31,35 @@ PROBES = {
 }
 
 
-def compile_ms(compiler, source, opt, runs):
-    best = None
+def compile_once(compiler, source, opt, tmp, is_clang):
+    obj = os.path.join(tmp, "probe.o")
+    trace = os.path.join(tmp, "probe.json")
+    cmd = [compiler, "-std=c++23", "-fno-exceptions", "-fno-rtti", opt,
+           "-I", os.path.join(ROOT, "include"), "-c", source, "-o", obj]
+    if is_clang:
+        cmd.append("-ftime-trace")
+    start = time.perf_counter()
+    subprocess.run(cmd, check=True)
+    ms = (time.perf_counter() - start) * 1000.0
+    if is_clang and os.path.exists(trace):
+        with open(trace) as f:
+            events = json.load(f)["traceEvents"]
+        totals = [e["dur"] for e in events if e.get("name") == "Total ExecuteCompiler"]
+        if totals:
+            ms = totals[0] / 1000.0
+    return ms
+
+
+def measure(compiler, opt, runs):
+    """Fastest time in ms for each probe, with the runs interleaved."""
+    is_clang = "clang" in subprocess.run([compiler, "--version"], capture_output=True,
+                                         text=True).stdout
+    best = {}
     with tempfile.TemporaryDirectory() as tmp:
-        obj = os.path.join(tmp, "probe.o")
-        cmd = [compiler, "-std=c++23", "-fno-exceptions", "-fno-rtti", opt,
-               "-I", os.path.join(ROOT, "include"), "-c", source, "-o", obj]
-        is_clang = "clang" in subprocess.run([compiler, "--version"], capture_output=True,
-                                             text=True).stdout
-        if is_clang:
-            cmd.append("-ftime-trace")
         for _ in range(runs):
-            start = time.perf_counter()
-            subprocess.run(cmd, check=True)
-            ms = (time.perf_counter() - start) * 1000.0
-            trace = os.path.join(tmp, "probe.json")
-            if is_clang and os.path.exists(trace):
-                with open(trace) as f:
-                    events = json.load(f)["traceEvents"]
-                totals = [e["dur"] for e in events if e.get("name") == "Total ExecuteCompiler"]
-                if totals:
-                    ms = totals[0] / 1000.0
-            best = ms if best is None else min(best, ms)
+            for name, source in PROBES.items():
+                ms = compile_once(compiler, source, opt, tmp, is_clang)
+                best[name] = min(best.get(name, ms), ms)
     return best
 
 
@@ -58,29 +72,28 @@ def main():
     ap.add_argument("--record", metavar="FILE")
     ap.add_argument("--check", metavar="FILE")
     ap.add_argument("--tolerance", type=float, default=0.20)
-    ap.add_argument("--oat-only", action="store_true")
     args = ap.parse_args()
 
-    results = {}
+    results = measure(args.compiler, args.opt, args.runs)
+    ratio = results["oat"] / results["std"]
     for name, source in PROBES.items():
-        if name != "oat" and (args.oat_only or args.check or args.record):
-            continue
-        results[name] = compile_ms(args.compiler, source, args.opt, args.runs)
         print(f"{name:4s} {results[name]:8.1f} ms   ({os.path.relpath(source, ROOT)}, {args.opt})")
+    print(f"oat / std = {ratio:.4f}")
 
     if args.record:
         with open(args.record, "w") as f:
-            json.dump({"oat_ms": round(results["oat"], 1), "compiler": args.compiler,
+            json.dump({"oat_over_std": round(ratio, 4), "oat_ms": round(results["oat"], 1),
+                       "std_ms": round(results["std"], 1), "compiler": args.compiler,
                        "opt": args.opt}, f, indent=2)
             f.write("\n")
         print(f"baseline recorded in {args.record}")
     if args.check:
         with open(args.check) as f:
-            baseline = json.load(f)["oat_ms"]
+            baseline = json.load(f)["oat_over_std"]
         limit = baseline * (1.0 + args.tolerance)
-        print(f"baseline {baseline:.1f} ms, limit {limit:.1f} ms")
-        if results["oat"] > limit:
-            print("FAIL: the oat compile-time probe is more than "
+        print(f"baseline ratio {baseline:.4f}, limit {limit:.4f}")
+        if ratio > limit:
+            print("FAIL: relative to the std probe, the oat probe is more than "
                   f"{args.tolerance:.0%} slower than the baseline")
             return 1
         print("ok")

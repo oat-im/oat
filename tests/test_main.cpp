@@ -12,6 +12,7 @@ static void no_dialogs() {
   SetErrorMode(0x0001 | 0x0002 | 0x8000); // FAILCRITICALERRORS | NOGPFAULTERRORBOX | NOOPENFILEERRORBOX
   _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
   for (int kind : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+    (void)kind; // the two calls below compile to nothing in a release build
     _CrtSetReportMode(kind, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(kind, _CRTDBG_FILE_STDERR);
   }

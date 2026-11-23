@@ -1,4 +1,7 @@
 // oat/os/fs.h - directories and file metadata.
+//
+// On Windows, paths longer than 260 characters fail unless long paths are
+// enabled for the machine and in the application's manifest.
 #pragma once
 
 #include "../array.h"

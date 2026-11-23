@@ -66,6 +66,9 @@ Result<void> File::write(Span<const u8> bytes) {
 
 Result<u64> File::seek(i64 offset, SeekFrom from) {
   OAT_ASSERT(handle != nullptr);
+  // Platforms disagree about seeking before the start; refuse it everywhere.
+  if (from == SeekFrom::Start && offset < 0)
+    return detail::fail(Error::InvalidArgument, "seek before the start of the file");
   SDL_IOWhence whence = SDL_IO_SEEK_SET;
   if (from == SeekFrom::Current) whence = SDL_IO_SEEK_CUR;
   if (from == SeekFrom::End) whence = SDL_IO_SEEK_END;

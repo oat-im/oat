@@ -227,18 +227,24 @@ TEST(fs_long_and_unicode_paths) {
   if (list && list->len == 1) CHECK((*list)[0].name == os::filename(unicode));
   CHECK(os::remove(unicode).has_value());
 
-  // A path longer than the small on-stack buffer used for SDL calls.
+  // A path longer than the small on-stack buffer oat uses for SDL calls.
   Allocator h = heap();
   StrBuf deep;
   deep.append(tmp.root, h);
   for (u32 i = 0; i < 12; ++i) deep.append("/a-directory-name-that-is-fifty-characters-long-00", h);
   CHECK(deep.len > 600);
+  CHECK(!os::exists(deep.view()));
+  CHECK(os::path_info(deep.view()).error() == Error::NotFound);
+#if !defined(_WIN32)
+  // Windows limits paths to 260 characters unless long paths are switched on
+  // for the machine and the application, so the rest runs elsewhere.
   CHECK(os::create_dirs(deep.view()).has_value());
   CHECK(os::exists(deep.view()));
   deep.append("/f.txt", h);
   CHECK(os::write_entire_file(deep.view(), "deep").has_value());
   Result<std::span<u8>> data = os::read_entire_file(deep.view(), tmp.a);
   CHECK(data && as_text(*data) == "deep");
+#endif
   deep.free(h);
 }
 

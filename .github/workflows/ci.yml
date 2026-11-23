@@ -136,8 +136,9 @@ jobs:
           ./build/oat_tests arena
 
   # Fails if including oat.h and instantiating every container for 20 types
-  # gets more than 20% slower than the recorded baseline. The first green run
-  # on the default branch records the baseline.
+  # gets more than 20% slower than the recorded baseline. Runners vary in
+  # speed, so the measure is the oat probe's time relative to the std probe's
+  # in the same run. The first run on the default branch records the baseline.
   compile-time:
     runs-on: ubuntu-24.04
     steps:
@@ -149,7 +150,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: compile-time-baseline.json
-          key: compile-time-baseline-v1
+          key: compile-time-baseline-v2
       - name: Check against baseline
         if: steps.baseline.outputs.cache-hit == 'true'
         run: python3 tools/compile_time.py --compiler clang++-19 --check compile-time-baseline.json
@@ -161,9 +162,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: compile-time-baseline.json
-          key: compile-time-baseline-v1
-      - name: Report
-        run: python3 tools/compile_time.py --compiler clang++-19 --runs 3
+          key: compile-time-baseline-v2
 
   # Not a gate: runs the benchmarks on each platform and puts the tables in the
   # run summary. Hosted runners are noisy, so read these as rough comparisons.

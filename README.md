@@ -108,7 +108,7 @@ Measured with `tools/compile_time.py` (Clang `-ftime-trace`, fastest of several 
 
 Including the headers is cheap for all three; the difference is in what each instantiation costs, which is where a game's build time goes. With oat in a precompiled header the include cost disappears as well. There is no EASTL version of the instantiation probe, so that comparison is not made here.
 
-CI records a baseline for the oat probe on its first green run and fails if a later build is more than 20% slower.
+CI fails if the oat probe gets more than 20% slower than its recorded baseline. Because runners differ in speed from run to run, what is recorded and compared is the oat probe's time divided by the std probe's time in the same run.
 
 ## Benchmarks
 
@@ -190,6 +190,7 @@ Things verified against the plan's open questions:
 - Every SDL3 and SDL3_net function oat calls was checked against the installed headers (SDL 3.4, SDL_net 3.2).
 - `SDL_RenamePath` is documented to replace an existing file, so `write_entire_file` is atomic. Not yet observed on Windows.
 - SDL's file, time, thread and library functions work without `SDL_Init`; the tests never call it. `os::init()` only installs the allocator.
+- On Windows, paths over 260 characters fail unless long paths are enabled (found by CI), and a load of a file that is not a library can open a system dialog unless the application calls `SetErrorMode` (see `os/dylib.h`).
 - SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one.
 - SDL3_net has no call to read back the port chosen for port 0.
 - `hash_bytes` is written for oat on the multiply-and-fold idea of wyhash (public domain). Nothing was ported from EASTL, so no third-party notice is needed.

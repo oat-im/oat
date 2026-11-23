@@ -17,10 +17,10 @@ static std::span<const u8> as_bytes(std::string_view s) {
   return std::span<const u8>(reinterpret_cast<const u8*>(s.data()), s.size());
 }
 
-// Polls `step` until it stops returning WouldBlock, for at most two seconds.
+// Polls `step` until it stops returning WouldBlock, for at most `seconds`.
 template <class Step>
-static auto poll(Step step) -> decltype(step()) {
-  u64 deadline = os::now_ns() + 2000ull * 1000 * 1000;
+static auto poll(Step step, u64 seconds = 2) -> decltype(step()) {
+  u64 deadline = os::now_ns() + seconds * 1000ull * 1000 * 1000;
   for (;;) {
     auto r = step();
     if (r || r.error() != Error::WouldBlock || os::now_ns() > deadline) return r;
@@ -125,7 +125,8 @@ TEST(net_tcp_connect_refused) {
   Result<net::TcpStream> client = net::TcpStream::connect(addr, 47639);
   CHECK(client.has_value());
   if (client) {
-    Result<void> status = poll([&] { return client->connect_status(); });
+    // Windows retries a refused connection for a couple of seconds before giving up.
+    Result<void> status = poll([&] { return client->connect_status(); }, 20);
     CHECK(!status && status.error() == Error::Io);
     client->close();
   }
