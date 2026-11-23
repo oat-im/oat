@@ -4,14 +4,14 @@ Every rule here is a precondition of the library. Each has a mechanical check, a
 
 | # | Rule | Checked by | What breaks it | Test |
 | --- | --- | --- | --- | --- |
-| 1 | Container elements are movable with `memcpy` | `static_assert(is_relocatable<T>)` | `struct Node { Node* self = this; };`<br>`Array<Node> a; a.push(n, h);` | `compile_fail/array_not_relocatable.cpp` and three more |
+| 1 | Container elements are movable with `memcpy` | `static_assert(is_relocatable<T>)`, which catches types that are not trivially copyable | `struct Name { Name(const Name&); char* text; };`<br>`Array<Name> a; a.push(n, h);` | `compile_fail/array_not_relocatable.cpp` and three more |
 | 2 | Containers never run element destructors | `static_assert` that `T` is trivially destructible | `struct Tex { ~Tex() { release(); } };`<br>`Pool<Tex> p; p.add(t, h);` | `compile_fail/array_nontrivial_destructor.cpp`, `pool_nontrivial_destructor.cpp` |
 | 3 | Raw-byte hash keys have no padding and no floats | `static_assert(__has_unique_object_representations(K))` | `struct K { u8 kind; u32 id; };`<br>`Map<K, int> m; m.find(k);` | `compile_fail/map_key_padding.cpp`, `map_key_float.cpp`, `set_key_float_member.cpp` |
 | 4 | No exceptions, no RTTI | Compiler flags, `PUBLIC` on the `oat` target | `throw Error::Io;`<br>`dynamic_cast<Enemy*>(entity)` | `compile_fail/flags/uses_exceptions.cpp`, `uses_rtti.cpp` |
 | 5 | Fallible functions return `Result<T>` and the result is used | `[[nodiscard]]` on every such function | `os::create_dirs("saves");`<br>(the error is dropped) | `compile_fail/flags/discards_result.cpp` |
-| 6 | `.value()` is never called on a `Result` or `Option` | Lint | `i64 n = parse_int(s).value();`<br>(aborts on error, with exceptions off) | `lint_cases/bad_value` |
+| 6 | `.value()` is never called on a `Result` or `Option` | Lint | `i64 n = parse_int(s).value();`<br>(aborts on error, with exceptions off) | `lint_cases/bad_value`, `bad_arrow_value` |
 | 7 | No `std::` in project code | Lint | `std::vector<Enemy> enemies;`<br>`std::move(x)` (write `oat::move`) | `lint_cases/bad_std`, `bad_std_move` |
-| 8 | No system includes outside `oat/` and the PCH | Lint | `#include <vector>`<br>in any game source | `lint_cases/bad_include` |
+| 8 | No system includes outside `oat/` and the PCH | Lint | `#include <vector>`<br>in any game source | `lint_cases/bad_include`, `bad_quoted_include` |
 | 9 | Length and capacity are 32-bit | Runtime check, always on | `Array<u8> a;` grown past<br>4,294,967,295 elements | `array_asserts` |
 | 10 | No inserting an element of a container into itself | `OAT_ASSERT` on the address | `a.push(a[0], h);`<br>(growth frees `a[0]` first) | `array_asserts`, `map_self_insert_asserts`, `strbuf_append` |
 | 11 | No pointers held across growth | ASan poisoning of abandoned and reset arena memory | `Enemy* e = &a[0]; a.push(x, temp);`<br>`e->hp = 0;` | `arena_allocator_resize`, `arena_mark_reset` (ASan builds) |
@@ -30,13 +30,22 @@ template <> constexpr bool oat::is_relocatable<Mesh> = true;
 
 oat's own containers are plain structs with no destructor, so they qualify already and can be nested (`Array<Array<u32>>`, `Map<u64, StrBuf>`).
 
+**What the assert cannot see.** It checks how the type is copied, not what its pointers point at. A trivially copyable type that points into itself passes the assert and then breaks silently when the container grows:
+
+```cpp
+struct Buffer { char text[32]; char* cursor = text; };   // compiles, and is wrong in an Array
+struct Node   { Node* self = this; };                    // same
+```
+
+After growth, `cursor` and `self` still point at the old, freed storage. The same goes for anything outside the container that holds a pointer to an element (rule 11). Nothing in the language lets a library detect this, so it is a rule to follow, not one oat can enforce: store an offset or an index instead of a pointer into the same object, or keep such objects in a `Pool`, whose elements never move.
+
 **2. Destructors.** Give a type that owns something an explicit `destroy()` or `free(Allocator&)` and call it before removing the element. The asserts are inside member functions, not at class scope, so self-referential types compile: `struct Node { Array<Node> children; };`.
 
 **3. Hash keys.** Padding bytes are not initialized, so two equal keys can hash differently. Floats have `-0.0 == 0.0` with different bytes, and `NaN != NaN` with equal bytes. For such a key, specialize `oat::KeyTraits<K>` with `hash()` and `eq()`. `Str` keys hash their characters; the map stores the view, not the characters, so use interned or arena strings.
 
 **5. Results.** Write `(void)` in front of a call whose failure really does not matter.
 
-**6 and 7.** Use `if (r)` and `*r`, or `OAT_TRY`. The oat names for the standard types are `Result`, `Expected`, `Option`, `none`, `Str`, `Span`, `Atomic`, `oat::move` and `oat::forward`. The lint does not skip comments, so a comment that mentions a banned name is flagged too.
+**6 and 7.** Use `if (r)` and `*r`, or `OAT_TRY`. The lint is a tripwire, not a parser: it matches text, so it catches the direct forms (`.value()`, `->value()`, `std::`, `#include <...>`, `#include "vector"`) and can be fooled by a macro or a typedef. The oat names for the standard types are `Result`, `Expected`, `Option`, `none`, `Str`, `Span`, `Atomic`, `oat::move` and `oat::forward`. The lint does not skip comments, so a comment that mentions a banned name is flagged too.
 
 **9. 32-bit sizes.** `Array`, `StrBuf`, `BitSet` and `Pool` stop at 2^32 - 1 elements, `Map` at 2^31 slots.
 

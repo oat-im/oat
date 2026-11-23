@@ -145,6 +145,27 @@ TEST(bounds_against_std) {
   CHECK(at == 1 && past == 3);
 }
 
+TEST(hash_bytes_matches_wyhash) {
+  // Values produced by the reference wyhash.h (final version 4.3), default
+  // secret, seed 0, for the messages its own test program uses. They cover
+  // every length class: 0, 1-3, 4-16, 17-47 and 48 or more.
+  struct Vector {
+    const char* text;
+    u64 hash;
+  };
+  const Vector vectors[] = {
+      {"", 0x93228a4de0eec5a2ull},
+      {"a", 0xaced12527fe5bff8ull},
+      {"abc", 0x989b4a209c1011c9ull},
+      {"message digest", 0x309ab4c045215e8full},
+      {"abcdefghijklmnopqrstuvwxyz", 0xccaeadc12a061176ull},
+      {"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 0x1fdd130ecb5b4709ull},
+      {"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+       0x7e22da19f1a6055aull},
+  };
+  for (const Vector& v : vectors) CHECK(hash_bytes(v.text, std::strlen(v.text)) == v.hash);
+}
+
 TEST(hashing) {
   // Deterministic, and independent of the buffer's alignment.
   alignas(8) u8 buf[200];

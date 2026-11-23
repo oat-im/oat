@@ -9,72 +9,94 @@ namespace oat {
 // ---------------------------------------------------------------------------
 // hash_bytes
 //
-// A multiply-and-fold hash written for oat. It uses the same building block as
-// wyhash (a 64x64 -> 128 bit multiply whose halves are xored together), which
-// its authors placed in the public domain. Output is not stable across
-// versions or byte orders: do not write it to disk.
+// This is wyhash (final version 4.3) by Wang Yi, with its default secret and a
+// seed of 0: https://github.com/wangyi-fudan/wyhash. The author released it
+// into the public domain under The Unlicense. It is transcribed without
+// changes to the algorithm, so its published quality results (SMHasher) apply,
+// and tests/test_algo.cpp checks it against values from the reference code.
+// Little-endian only, like the rest of oat.
 // ---------------------------------------------------------------------------
 
-static inline u64 hash_mum(u64 a, u64 b) {
+static inline void wy_mum(u64* a, u64* b) {
 #if defined(__SIZEOF_INT128__)
-  __uint128_t r = static_cast<__uint128_t>(a) * b;
-  return static_cast<u64>(r) ^ static_cast<u64>(r >> 64);
+  __uint128_t r = *a;
+  r *= *b;
+  *a = static_cast<u64>(r);
+  *b = static_cast<u64>(r >> 64);
 #elif defined(_M_X64)
-  u64 hi;
-  u64 lo = _umul128(a, b, &hi);
-  return lo ^ hi;
+  *a = _umul128(*a, *b, b);
 #elif defined(_M_ARM64)
-  return (a * b) ^ __umulh(a, b);
+  u64 hi = __umulh(*a, *b);
+  *a = *a * *b;
+  *b = hi;
 #else
 #  error "oat::hash_bytes needs a 64x64->128 multiply on this target"
 #endif
 }
 
-static inline u64 hash_read64(const u8* p) {
+static inline u64 wy_mix(u64 a, u64 b) {
+  wy_mum(&a, &b);
+  return a ^ b;
+}
+
+static inline u64 wy_r8(const u8* p) {
   u64 v;
   std::memcpy(&v, p, 8);
   return v;
 }
 
-static inline u64 hash_read32(const u8* p) {
+static inline u64 wy_r4(const u8* p) {
   u32 v;
   std::memcpy(&v, p, 4);
   return v;
 }
 
-u64 hash_bytes(const void* data, usize size) {
-  constexpr u64 K0 = 0xa0761d6478bd642full;
-  constexpr u64 K1 = 0xe7037ed1a0b428dbull;
-  constexpr u64 K2 = 0x8ebc6af09c88c6e3ull;
+static inline u64 wy_r3(const u8* p, usize k) {
+  return (static_cast<u64>(p[0]) << 16) | (static_cast<u64>(p[k >> 1]) << 8) | p[k - 1];
+}
 
+u64 hash_bytes(const void* data, usize len) {
+  static constexpr u64 secret[4] = {0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull,
+                                    0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull};
   const u8* p = static_cast<const u8*>(data);
-  u64 h = K0;
-  u64 a = 0;
-  u64 b = 0;
-
-  if (size <= 16) {
-    if (size >= 8) {
-      a = hash_read64(p);
-      b = hash_read64(p + size - 8);
-    } else if (size >= 4) {
-      a = hash_read32(p);
-      b = hash_read32(p + size - 4);
-    } else if (size > 0) {
-      a = (static_cast<u64>(p[0]) << 16) | (static_cast<u64>(p[size >> 1]) << 8) | p[size - 1];
+  u64 seed = 0;
+  seed ^= wy_mix(seed ^ secret[0], secret[1]);
+  u64 a, b;
+  if (len <= 16) {
+    if (len >= 4) {
+      a = (wy_r4(p) << 32) | wy_r4(p + ((len >> 3) << 2));
+      b = (wy_r4(p + len - 4) << 32) | wy_r4(p + len - 4 - ((len >> 3) << 2));
+    } else if (len > 0) {
+      a = wy_r3(p, len);
+      b = 0;
+    } else {
+      a = b = 0;
     }
   } else {
-    const u8* end = p + size;
-    usize left = size;
-    while (left > 16) {
-      h = hash_mum(hash_read64(p) ^ K1, hash_read64(p + 8) ^ h);
-      p += 16;
-      left -= 16;
+    usize i = len;
+    if (i >= 48) {
+      u64 see1 = seed, see2 = seed;
+      do {
+        seed = wy_mix(wy_r8(p) ^ secret[1], wy_r8(p + 8) ^ seed);
+        see1 = wy_mix(wy_r8(p + 16) ^ secret[2], wy_r8(p + 24) ^ see1);
+        see2 = wy_mix(wy_r8(p + 32) ^ secret[3], wy_r8(p + 40) ^ see2);
+        p += 48;
+        i -= 48;
+      } while (i >= 48);
+      seed ^= see1 ^ see2;
     }
-    // The last 16 bytes, overlapping what the loop already consumed.
-    a = hash_read64(end - 16);
-    b = hash_read64(end - 8);
+    while (i > 16) {
+      seed = wy_mix(wy_r8(p) ^ secret[1], wy_r8(p + 8) ^ seed);
+      i -= 16;
+      p += 16;
+    }
+    a = wy_r8(p + i - 16);
+    b = wy_r8(p + i - 8);
   }
-  return hash_mum(K2 ^ size, hash_mum(a ^ K1, b ^ h));
+  a ^= secret[1];
+  b ^= seed;
+  wy_mum(&a, &b);
+  return wy_mix(a ^ secret[0] ^ len, b ^ secret[1]);
 }
 
 // ---------------------------------------------------------------------------

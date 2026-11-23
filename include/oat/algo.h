@@ -10,9 +10,12 @@ namespace oat {
 // Hashing
 // ---------------------------------------------------------------------------
 
+// wyhash (public domain, by Wang Yi) with its default secret and seed 0.
+// The values differ between little- and big-endian machines.
 u64 hash_bytes(const void* data, usize size);
 
-// A full-avalanche mix of one 64-bit value (the splitmix64 finalizer).
+// A full-avalanche mix of one 64-bit value: the splitmix64 finalizer (public
+// domain; David Stafford's "Mix13" constants).
 constexpr u64 hash_u64(u64 x) {
   x ^= x >> 30;
   x *= 0xbf58476d1ce4e5b9ull;

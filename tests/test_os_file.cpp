@@ -115,6 +115,7 @@ TEST(file_handle) {
   CHECK(w->is_open());
   CHECK(w->write(as_bytes("0123456789")).has_value());
   CHECK(w->write(std::span<const u8>()).has_value());
+  CHECK(w->flush().has_value()); // forced to disk; the file is still usable
   CHECK(*w->size() == 10);
   CHECK(w->close().has_value());
   CHECK(!w->is_open());

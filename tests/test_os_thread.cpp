@@ -222,6 +222,57 @@ TEST(jobs_parallel_for) {
   jobs.stop();
 }
 
+struct SteadyCtx {
+  os::JobSystem jobs;
+  os::JobGroup group;
+  os::Semaphore worker_parked;
+  os::Semaphore release_worker;
+  u32 remaining = 200000;
+  u32 max_cap = 0;
+  u32 ran = 0;
+};
+
+// Resubmits itself until `remaining` runs out.
+static void steady_job(void* p) {
+  SteadyCtx* c = static_cast<SteadyCtx*>(p);
+  ++c->ran;
+  c->max_cap = oat::max(c->max_cap, c->jobs.queue.cap);
+  if (c->remaining > 0) {
+    --c->remaining;
+    c->jobs.submit(steady_job, c, &c->group);
+  }
+}
+
+TEST(jobs_queue_stays_bounded_under_steady_load) {
+  // Two chains of jobs that keep resubmitting themselves, so the queue never
+  // drains. The only worker is parked, which leaves this thread running every
+  // job from group.wait(). The queue has to reuse its space rather than grow
+  // by one slot per job.
+  SteadyCtx ctx;
+  ctx.worker_parked = os::Semaphore::create(0);
+  ctx.release_worker = os::Semaphore::create(0);
+  ctx.jobs.start(1);
+  ctx.jobs.submit(
+      [](void* p) {
+        SteadyCtx* c = static_cast<SteadyCtx*>(p);
+        c->worker_parked.signal();
+        c->release_worker.wait();
+      },
+      &ctx);
+  ctx.worker_parked.wait();
+
+  ctx.jobs.submit(steady_job, &ctx, &ctx.group);
+  ctx.jobs.submit(steady_job, &ctx, &ctx.group);
+  ctx.group.wait();
+  CHECK(ctx.ran == 200002);
+  CHECK(ctx.max_cap <= 16); // not 200,000
+
+  ctx.release_worker.signal();
+  ctx.jobs.stop();
+  ctx.worker_parked.destroy();
+  ctx.release_worker.destroy();
+}
+
 TEST(jobs_scratch_arena_per_thread) {
   // Each thread gets its own arena, so jobs can use it without locking.
   struct Ctx {

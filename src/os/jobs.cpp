@@ -107,6 +107,16 @@ void JobSystem::submit(JobFn fn, void* ctx, JobGroup* group) {
     group->system = this;
     ++group->pending;
   }
+  // Popping only moves queue_head. Before the array would have to grow, slide
+  // the pending jobs back to the front, so a queue that never fully drains
+  // reuses its space instead of growing without bound. Each job is moved at
+  // most once per refill of the array, so this stays constant per job.
+  if (queue.len == queue.cap && queue_head > 0) {
+    u32 pending = queue.len - queue_head;
+    std::memmove(queue.data, queue.data + queue_head, sizeof(Job) * pending);
+    queue.len = pending;
+    queue_head = 0;
+  }
   queue.push(Job{fn, ctx, group}, h);
   // Either a worker or a thread helping from JobGroup::wait picks it up.
   wake.signal();

@@ -1,8 +1,10 @@
 # The oat lint. Fails if any .h or .cpp under OAT_LINT_DIR breaks a rule:
-#   - no #include <...> of a system or standard header
+#   - no #include <...> of a system or standard header, and no quoted include
+#     of a name without an extension ("vector")
 #   - no std:: at all: use oat's names (Str, Span, Option, none, Result, err,
 #     Expected, Atomic, oat::move, oat::forward)
-#   - no .value() on a Result or Option (it aborts with exceptions off)
+#   - no .value() or ->value() on a Result or Option (it aborts with
+#     exceptions off)
 # Comments are not skipped, so a banned name in a comment is flagged too.
 #
 #   cmake -DOAT_LINT_DIR=<dir> [-DOAT_LINT_MODE=project|oat] -P check_oat.cmake
@@ -11,7 +13,7 @@
 # given their oat spelling, so a short list of them is allowed there.
 
 set(inc_ok "oat/[a-z_/]+\\.h")
-set(bad "#[ \t]*include[ \t]*<|std::|using[ \t]+namespace[ \t]+std|\\.value\\(\\)")
+set(bad "#[ \t]*include[ \t]*<|#[ \t]*include[ \t]*\"[^\".]*\"|std::|using[ \t]+namespace[ \t]+std|(\\.|->)value\\(\\)")
 set(hint "use oat's names instead of std:: (Str, Span, Option, none, Result, err, Expected, Atomic, oat::move, oat::forward)")
 if(OAT_LINT_MODE STREQUAL "oat")
   set(std_ok "expected|unexpected|optional|nullopt|nullopt_t|string_view|span|move|forward|atomic"

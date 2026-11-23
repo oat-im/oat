@@ -84,6 +84,14 @@ Result<u64> File::size() {
   return static_cast<u64>(n);
 }
 
+Result<void> File::flush() {
+  OAT_ASSERT(handle != nullptr);
+  // SDL syncs to the device here: fdatasync, F_FULLFSYNC on Apple systems,
+  // FlushFileBuffers on Windows.
+  if (!SDL_FlushIO(handle)) return detail::fail(Error::Io);
+  return {};
+}
+
 Result<void> File::close() {
   if (!handle) return {};
   SDL_IOStream* io = handle;
@@ -129,6 +137,9 @@ Result<void> write_entire_file(Str path, Span<const u8> bytes) {
     result = std::unexpected(file.error());
   } else {
     result = file->write(bytes);
+    // The data must be on disk before the rename, or a power cut could leave
+    // the new name pointing at a file whose contents never arrived.
+    if (result) result = file->flush();
     Result<void> closed = file->close();
     if (result && !closed) result = closed;
     if (result) result = rename(tmp.view(), path);

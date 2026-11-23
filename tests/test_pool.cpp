@@ -6,10 +6,16 @@
 
 using namespace oat;
 
-struct Enemy {
-  ListNode link;
+struct Enemy : ListNode<> {
   u32 id;
   u32 hp;
+};
+
+// One object in two lists at once, told apart by tag types.
+struct InActive;
+struct InVisible;
+struct Actor : ListNode<InActive>, ListNode<InVisible> {
+  u32 id;
 };
 
 TEST(pool_basics) {
@@ -125,7 +131,7 @@ TEST(pool_over_aligned) {
 TEST(intrusive_list) {
   Allocator h = heap();
   Pool<Enemy> pool;
-  IntrusiveList<Enemy, &Enemy::link> list;
+  IntrusiveList<Enemy> list;
   CHECK(list.is_empty() && list.front() == nullptr && list.back() == nullptr);
   for (Enemy& e : list) {
     (void)e;
@@ -162,7 +168,7 @@ TEST(intrusive_list) {
 
   // A removed node can be linked again.
   Enemy* first = pool.get(handles[0]);
-  CHECK(first->link.prev == nullptr && first->link.next == nullptr);
+  CHECK(first->prev == nullptr && first->next == nullptr);
   list.push_back(*first);
   CHECK(list.back() == first);
 #if OAT_DEBUG
@@ -172,4 +178,28 @@ TEST(intrusive_list) {
   while (!list.is_empty()) list.remove(*list.front());
   CHECK(list.head == nullptr && list.tail == nullptr);
   pool.free(h);
+}
+
+TEST(intrusive_list_two_lists) {
+  Actor actors[5];
+  for (u32 i = 0; i < 5; ++i) actors[i].id = i;
+  IntrusiveList<Actor, InActive> active;
+  IntrusiveList<Actor, InVisible> visible;
+  for (Actor& a : actors) active.push_back(a);
+  for (u32 i = 0; i < 5; i += 2) visible.push_front(actors[i]); // 4, 2, 0
+
+  std::vector<u32> seen;
+  for (Actor& a : visible) seen.push_back(a.id);
+  CHECK((seen == std::vector<u32>{4, 2, 0}));
+
+  // Leaving one list does not disturb the other.
+  active.remove(actors[2]);
+  seen.clear();
+  for (Actor& a : active) seen.push_back(a.id);
+  CHECK((seen == std::vector<u32>{0, 1, 3, 4}));
+  seen.clear();
+  for (Actor& a : visible) seen.push_back(a.id);
+  CHECK((seen == std::vector<u32>{4, 2, 0}));
+  CHECK(active.front() == &actors[0] && active.back() == &actors[4]);
+  CHECK(visible.front() == &actors[4] && visible.back() == &actors[0]);
 }

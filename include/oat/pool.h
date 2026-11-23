@@ -123,30 +123,42 @@ struct Pool {
 };
 
 // ---------------------------------------------------------------------------
-// IntrusiveList: a doubly linked list threaded through a ListNode member.
+// IntrusiveList: a doubly linked list threaded through its elements, which
+// derive from ListNode<>.
 //
-//   struct Enemy { ListNode link; ... };
-//   IntrusiveList<Enemy, &Enemy::link> active;
+//   struct Enemy : ListNode<> { u32 hp; };
+//   IntrusiveList<Enemy> active;
+//
+// An element can be in one list per ListNode base. To put it in two lists at
+// once, give each list a tag type:
+//
+//   struct InActive; struct InVisible;
+//   struct Enemy : ListNode<InActive>, ListNode<InVisible> { ... };
+//   IntrusiveList<Enemy, InActive> active;
+//   IntrusiveList<Enemy, InVisible> visible;
 //
 // The list stores pointers to its elements, so they must not move while
 // linked. Pool elements qualify; Array elements do not, because growth moves
 // them.
 // ---------------------------------------------------------------------------
 
+template <class Tag = void>
 struct ListNode {
   ListNode* prev = nullptr;
   ListNode* next = nullptr;
 };
 
-template <class T, ListNode T::* Member>
+template <class T, class Tag = void>
 struct IntrusiveList {
-  ListNode* head = nullptr;
-  ListNode* tail = nullptr;
+  using Node = ListNode<Tag>;
+
+  Node* head = nullptr;
+  Node* tail = nullptr;
 
   bool is_empty() const { return head == nullptr; }
 
   void push_back(T& item) {
-    ListNode* n = &(item.*Member);
+    Node* n = &item; // T derives from ListNode<Tag>
     OAT_ASSERT_MSG(!n->prev && !n->next && head != n, "node is already in a list");
     n->prev = tail;
     n->next = nullptr;
@@ -156,7 +168,7 @@ struct IntrusiveList {
   }
 
   void push_front(T& item) {
-    ListNode* n = &(item.*Member);
+    Node* n = &item;
     OAT_ASSERT_MSG(!n->prev && !n->next && head != n, "node is already in a list");
     n->prev = nullptr;
     n->next = head;
@@ -167,7 +179,7 @@ struct IntrusiveList {
 
   // `item` must be in this list.
   void remove(T& item) {
-    ListNode* n = &(item.*Member);
+    Node* n = &item;
     if (n->prev) n->prev->next = n->next;
     else head = n->next;
     if (n->next) n->next->prev = n->prev;
@@ -176,15 +188,15 @@ struct IntrusiveList {
     n->next = nullptr;
   }
 
-  T* front() { return head ? owner(head) : nullptr; }
-  T* back() { return tail ? owner(tail) : nullptr; }
+  T* front() { return static_cast<T*>(head); }
+  T* back() { return static_cast<T*>(tail); }
 
   // The successor is read before the body runs, so removing the current
   // element while iterating is safe.
   struct Iter {
-    ListNode* node;
-    ListNode* next;
-    T& operator*() const { return *owner(node); }
+    Node* node;
+    Node* next;
+    T& operator*() const { return *static_cast<T*>(node); }
     Iter& operator++() {
       node = next;
       next = node ? node->next : nullptr;
@@ -194,15 +206,6 @@ struct IntrusiveList {
   };
   Iter begin() { return Iter{head, head ? head->next : nullptr}; }
   Iter end() { return Iter{nullptr, nullptr}; }
-
- private:
-  static T* owner(ListNode* n) {
-    // The offset of the member, taken from a non-null, well-aligned address
-    // that is never dereferenced.
-    constexpr usize fake = 0x10000;
-    usize offset = reinterpret_cast<usize>(&(reinterpret_cast<T*>(fake)->*Member)) - fake;
-    return reinterpret_cast<T*>(reinterpret_cast<unsigned char*>(n) - offset);
-  }
 };
 
 } // namespace oat

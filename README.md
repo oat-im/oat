@@ -84,11 +84,11 @@ oat is built on a handful of standard types. They are aliased in `oat/base.h`, a
 
 **`str.h`** `StrBuf` (always NUL-terminated, `appendf` is compiler-checked), `trim`, `split_once`, `parse_int`, `parse_float`, `to_cstr`, `utf8_decode`, `utf8_encode`, `Sym` and `StrTable` (interning).
 
-**`pool.h`** `Pool<T>` with generational `Handle<T>` (chunked, so addresses are stable), `IntrusiveList<T, &T::node>`.
+**`pool.h`** `Pool<T>` with generational `Handle<T>` (chunked, so addresses are stable), `IntrusiveList<T>` (elements derive from `ListNode<>`).
 
 **`algo.h`** `sort` (introsort), `sort_stable`, `radix_sort`, `lower_bound`, `upper_bound`, `hash_bytes`, `hash_u64`, `hash_combine`, `Rng` (xoshiro256**).
 
-**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (atomic), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` (hot reload: poll `path_info(...).modified_ns` once a frame).
+**`os.h`** `os::init`, `os::last_error_text`; `Thread`, `Mutex`, `MutexLock`, `CondVar`, `Semaphore`; `JobSystem`, `JobGroup`, `parallel_for`, `scratch_arena`; `read_entire_file`, `write_entire_file` (synced to disk, then renamed into place), `File`; `list_dir`, `path_info`, `create_dirs`, `remove`, `rename`, `exe_dir`, `user_data_dir`; `join`, `extension`, `stem`, `parent`, `normalize`; `now_ns`, `sleep_ns`, `wall_clock`, `to_calendar`; `Library` (hot reload: poll `path_info(...).modified_ns` once a frame).
 
 **`net.h`** `net::resolve`, `TcpListener`, `TcpStream`, `UdpSocket`, `wait_for_input`.
 
@@ -107,6 +107,8 @@ Measured with `tools/compile_time.py` (Clang `-ftime-trace`, fastest of several 
 | std: the equivalent code (`bench/compile_time/std_instantiate.cpp`) | 3,190 ms |
 
 Including the headers is cheap for all three; the difference is in what each instantiation costs, which is where a game's build time goes. With oat in a precompiled header the include cost disappears as well. There is no EASTL version of the instantiation probe, so that comparison is not made here.
+
+Read the 10x as the upper end, not as a typical figure. The probe is written to stress instantiation, and its std side uses some of the heaviest templates in the library for each of the 20 types: `std::deque`, `std::stable_sort`, `unique_ptr` and three unordered containers. A game that mostly uses `std::vector` would see a smaller gap. On CI the same probe measured 6x on Linux with both GCC and Clang, and 11x on macOS.
 
 CI fails if the oat probe gets more than 20% slower than its recorded baseline. Because runners differ in speed from run to run, what is recorded and compared is the oat probe's time divided by the std probe's time in the same run.
 
@@ -156,7 +158,7 @@ cmake --build build && ctest --test-dir build
 
 - `oat_tests`, `oat_os_tests`, `oat_net_tests`: one `test_*.cpp` per module on a 50-line runner (`tests/test.h`). Containers are checked against a brute-force model under random operations. `oat_os` tests run in a temporary directory next to the executable; `oat_net` tests use loopback ports 47631-47639.
 - **Compile-fail tests** (`tests/compile_fail`): every static-assert and compiler-flag rule has a file that must not compile, checked at configure time with `try_compile`.
-- **Lint tests**: the lint must accept one directory and reject four.
+- **Lint tests**: the lint must accept one directory and reject six.
 - Sanitizers: `-DOAT_SANITIZE=address,undefined` or `-DOAT_SANITIZE=thread`.
 
 ## Debugger visualizers
@@ -190,12 +192,12 @@ The benchmark tables above are from one Apple Silicon machine. The benchmarks CI
 Things verified against the plan's open questions:
 
 - Every SDL3 and SDL3_net function oat calls was checked against the installed headers (SDL 3.4, SDL_net 3.2).
-- `SDL_RenamePath` is documented to replace an existing file, so `write_entire_file` is atomic. The Windows tests that overwrite an existing file pass.
+- `SDL_RenamePath` is documented to replace an existing file, and the Windows tests that overwrite one pass. `write_entire_file` calls `SDL_FlushIO` before the rename, which SDL implements as `fdatasync`, `F_FULLFSYNC` on Apple systems and `FlushFileBuffers` on Windows (read from SDL's source; `SDL_CloseIO` alone does not sync). So a power cut leaves the old file or the new one, never an empty one. Whether the rename itself is durable at that instant is up to the file system.
 - SDL's file, time, thread and library functions work without `SDL_Init`; the tests never call it. `os::init()` only installs the allocator.
 - On Windows, paths over 260 characters fail unless long paths are enabled (found by CI), and a load of a file that is not a library can open a system dialog unless the application calls `SetErrorMode` (see `os/dylib.h`).
 - SDL3_net rejects empty datagrams; `UdpSocket::send` returns `InvalidArgument` for one.
 - SDL3_net has no call to read back the port chosen for port 0.
-- `hash_bytes` is written for oat on the multiply-and-fold idea of wyhash (public domain). Nothing was ported from EASTL, so no third-party notice is needed.
+- `hash_bytes` is wyhash (final version 4.3, public domain under The Unlicense), transcribed without changes and checked against the reference code on 120,000 random inputs plus fixed vectors in the tests. `hash_u64` is the splitmix64 finalizer. Nothing was ported from EASTL.
 - Minimum compilers: GCC 14, Visual Studio 2022 17.8, and Clang 19 when Clang is used with libstdc++ (Clang 18 does not enable libstdc++'s `<expected>`). On GCC, `__has_trivial_destructor` is used where Clang and MSVC have `__is_trivially_destructible`.
 
 ## License

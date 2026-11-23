@@ -157,11 +157,11 @@ if(OAT_BUILD_TESTS)
 
   include(tests/compile_fail/compile_fail.cmake)
 
-  # The lint itself is tested: one directory it must accept, four it must reject.
+  # The lint itself is tested: one directory it must accept, six it must reject.
   add_test(NAME oat_lint_accepts_good
     COMMAND ${CMAKE_COMMAND} -DOAT_LINT_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/lint_cases/good
             -P ${OAT_LINT_SCRIPT})
-  foreach(case bad_include bad_std bad_std_move bad_value)
+  foreach(case bad_include bad_quoted_include bad_std bad_std_move bad_value bad_arrow_value)
     add_test(NAME oat_lint_rejects_${case}
       COMMAND ${CMAKE_COMMAND} -DOAT_LINT_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/lint_cases/${case}
               -P ${OAT_LINT_SCRIPT})

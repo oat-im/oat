@@ -13,8 +13,13 @@ namespace oat::os {
 // a.free(bytes.data(), bytes.size() + 1), or use an arena.
 [[nodiscard]] Result<Span<u8>> read_entire_file(Str path, Allocator& a);
 
-// Writes to "<path>.tmp" and renames it over the target, so a crash cannot
-// leave a half-written file behind.
+// Replaces the file safely: writes "<path>.tmp", forces its contents to disk,
+// then renames it over the target. After a crash or a power cut the path holds
+// either the complete old contents or the complete new ones, never a partial
+// or empty file. (Whether the rename itself has reached the disk at the moment
+// power is lost is up to the file system; either outcome is a whole file.)
+// The sync makes this slow, tens of milliseconds on some disks: use it for
+// saves and settings, not for bulk output.
 [[nodiscard]] Result<void> write_entire_file(Str path, Span<const u8> bytes);
 [[nodiscard]] Result<void> write_entire_file(Str path, Str text);
 
@@ -40,7 +45,12 @@ struct File {
   // Returns the new position from the start of the file.
   [[nodiscard]] Result<u64> seek(i64 offset, SeekFrom from);
   [[nodiscard]] Result<u64> size();
-  // Closing flushes, so it can fail. The handle is released either way.
+  // Forces everything written so far onto the disk, past the operating
+  // system's cache. Slow; only for data that must survive a power cut.
+  [[nodiscard]] Result<void> flush();
+  // Hands buffered writes to the operating system, so it can fail. It does
+  // not force them to disk: call flush() first if that matters. The handle is
+  // released either way.
   [[nodiscard]] Result<void> close();
 
   bool is_open() const { return handle != nullptr; }

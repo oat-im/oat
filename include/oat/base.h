@@ -119,7 +119,12 @@ namespace oat {
 // ---------------------------------------------------------------------------
 
 // True when a T can be moved to a new address with memcpy and the old bytes
-// forgotten. Every container element must satisfy this. A type that owns a
+// forgotten. Every container element must satisfy this.
+//
+// The default only knows how the type is copied. A trivially copyable type
+// that holds a pointer into itself (`struct B { char buf[8]; char* p = buf; }`)
+// passes and is still wrong in a container: that cannot be detected, so do
+// not write one. A type that owns a
 // pointer but is still safe to memcpy opts in:
 //
 //   template <> constexpr bool oat::is_relocatable<MyType> = true;
